@@ -15,7 +15,7 @@ from typing import Any, Callable, Protocol
 
 
 REQUEST_SCHEMA = "mesh-to-cad.agent-intent/1"
-RESPONSE_SCHEMA = "mesh-to-cad.agent-response/3"
+RESPONSE_SCHEMA = "mesh-to-cad.agent-response/4"
 ERROR_SCHEMA = "mesh-to-cad.agent-error/1"
 
 MAX_REQUEST_BYTES = 64 * 1024
@@ -72,6 +72,10 @@ class SupervisorPorts(Protocol):
 
     def inspect_repair_targets(
         self, step_handle: str, offset: int
+    ) -> Mapping[str, Any]: ...
+
+    def observe_target_section(
+        self, step_handle: str, rank: int
     ) -> Mapping[str, Any]: ...
 
     def select_and_finalize(
@@ -258,6 +262,7 @@ def _next_result(value: Any, path: str) -> list[str]:
 
 DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/2"
 REPAIR_TARGET_PAGE_SCHEMA = "mesh-to-cad.repair-target-page/1"
+TARGET_SECTION_OBSERVATION_SCHEMA = "mesh-to-cad.target-section-observation/1"
 _DECISION_FACT_MAX_TARGETS = 8
 _ACCEPTANCE_STATE_VALUES = ("acceptance_satisfied", "unaccepted")
 
@@ -750,6 +755,35 @@ def _validate_finalize_result(value: Any, path: str) -> dict[str, Any]:
     return _result_fields(value, (("state", "state"), ("final_delivery_handle", "handle"), ("permitted_next_intents", "next")), path, "select_and_finalize")
 
 
+def _target_section_side(value: Any, path: str) -> dict[str, Any]:
+    value = _closed(value, ("triangle_count", "profiles"), path)
+    projected = _section_profile_projection(
+        {
+            "schema": "meshscope.reference-section-profile/1",
+            "coordinate_contract": "trellis2_canonical/1",
+            "bin_count": 8,
+            "profiles": value["profiles"],
+        },
+        path,
+    )
+    return {
+        "triangle_count": _integer(value["triangle_count"], f"{path}.triangle_count"),
+        "profiles": projected["profiles"],
+    }
+
+
+def _validate_target_section_result(value: Any, path: str) -> dict[str, Any]:
+    value = _closed(value, ("schema", "rank", "reference", "candidate"), path)
+    if value["schema"] != TARGET_SECTION_OBSERVATION_SCHEMA:
+        _fail("supervisor_contract_violation", f"{path}.schema")
+    return {
+        "schema": TARGET_SECTION_OBSERVATION_SCHEMA,
+        "rank": _integer(value["rank"], f"{path}.rank"),
+        "reference": _target_section_side(value["reference"], f"{path}.reference"),
+        "candidate": _target_section_side(value["candidate"], f"{path}.candidate"),
+    }
+
+
 def _validate_observe_result(value: Any, path: str) -> dict[str, Any]:
     return {"observation": _observation_result(value, path)}
 
@@ -767,6 +801,7 @@ _OPERATION_SPECS = (
     _OperationSpec("submit_repair", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_repair_result, "Submit one measured Repair Cycle through the supervisor."),
     _OperationSpec("inspect_formal_preview", ((_FieldSpec("preview_handle", "handle"),),), _validate_preview_result, "Inspect one committed formal preview."),
     _OperationSpec("inspect_repair_targets", ((_FieldSpec("step_handle", "handle"), _FieldSpec("offset", "offset")),), _validate_repair_target_page_result, "Read one committed Repair Target page."),
+    _OperationSpec("observe_target_section", ((_FieldSpec("step_handle", "handle"), _FieldSpec("rank", "rank")),), _validate_target_section_result, "Observe one committed Repair Target section."),
     _OperationSpec("select_and_finalize", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "step_handle", "selection_handle", "notes_handle")),), _validate_finalize_result, "Select and request supervisor-owned Final Delivery."),
     _OperationSpec("observe_reference", ((
         _FieldSpec("reference_handle", "handle"), _FieldSpec("observation", "observation_request"),
@@ -821,6 +856,8 @@ def _validate_args(spec: _OperationSpec, args: dict[str, Any]) -> None:
             offset = _step(args[field.name], path)
             if offset % _DECISION_FACT_MAX_TARGETS:
                 _fail("invalid_request", path)
+        elif field.kind == "rank":
+            _step(args[field.name], path)
         elif field.kind == "observation_request":
             _validate_observation_request(args[field.name], path)
 
@@ -828,7 +865,7 @@ def _validate_args(spec: _OperationSpec, args: dict[str, Any]) -> None:
 def _field_schema(kind: str) -> dict[str, Any]:
     if kind == "handle":
         return {"type": "string", "pattern": _HANDLE_PATTERN}
-    if kind == "offset":
+    if kind in {"offset", "rank"}:
         return {"type": "integer", "minimum": 0}
     if kind == "observation_request":
         empty = {"type": "object", "additionalProperties": False, "properties": {}}
@@ -945,6 +982,8 @@ class AgentSurface:
                     result = self._ports.inspect_formal_preview(**args)
             elif intent == "inspect_repair_targets":
                 result = self._ports.inspect_repair_targets(**args)
+            elif intent == "observe_target_section":
+                result = self._ports.observe_target_section(**args)
             elif intent == "select_and_finalize":
                 result = self._ports.select_and_finalize(**args)
             else:
@@ -960,6 +999,10 @@ class AgentSurface:
                     args["reference_handle"],
                     args["observation"],
                 )
+            elif intent == "observe_target_section" and (
+                type(result) is not dict or result.get("rank") != args["rank"]
+            ):
+                _fail("supervisor_contract_violation", "$.result.rank")
             result = spec.result(result, "$.result")
         except AgentSurfaceError:
             _fail("supervisor_contract_violation", "$.result")
@@ -984,6 +1027,7 @@ __all__ = [
     "AgentSurfaceError",
     "DECISION_FACTS_SCHEMA",
     "REPAIR_TARGET_PAGE_SCHEMA",
+    "TARGET_SECTION_OBSERVATION_SCHEMA",
     "ERROR_SCHEMA",
     "INTENTS",
     "REQUEST_SCHEMA",

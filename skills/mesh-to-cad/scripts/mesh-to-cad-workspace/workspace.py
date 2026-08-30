@@ -1680,6 +1680,33 @@ def read_step_repair_targets(
     }
 
 
+def bind_step_target_section(
+    workspace: Path, *, step: int, rank: int
+) -> dict[str, Any]:
+    """Bind one public target rank to supervisor-only committed mesh inputs."""
+
+    workspace = Path(workspace).resolve()
+    if type(rank) is not int or isinstance(rank, bool) or rank < 0:
+        raise WorkspaceError("invalid_workspace_path", "repair target rank is invalid")
+    page_offset = rank - rank % _MAX_DECISION_FACT_TARGETS
+    page = read_step_repair_targets(workspace, step=step, offset=page_offset)
+    match = next((item for item in page["items"] if item["rank"] == rank), None)
+    if match is None:
+        raise WorkspaceError("invalid_workspace_path", "repair target rank is unavailable")
+    reference = read_canonical_reference_binding(workspace)["path"]
+    candidate = workspace / "steps" / f"{step:06d}" / "candidate" / CANDIDATE_MESH_RELATIVE
+    if candidate.is_symlink() or not candidate.is_file():
+        raise WorkspaceError(
+            "invalid_workspace_path", "committed Step candidate mesh is unavailable"
+        )
+    return {
+        "rank": rank,
+        "bounds_canonical": match["bounds_canonical"],
+        "reference_path": reference,
+        "candidate_path": candidate,
+    }
+
+
 def read_current_step_preview_png(workspace: Path, *, step: int) -> bytes:
     """Project a committed Measured Step formal preview as bounded bytes."""
 
@@ -3324,6 +3351,7 @@ __all__ = [
     "WorkspaceError",
     "ValidationResult",
     "begin_attempt",
+    "bind_step_target_section",
     "cancel_active_commands",
     "compile_terminal_validation",
     "AGENT_SELECTION_CLAIM_SCHEMA",

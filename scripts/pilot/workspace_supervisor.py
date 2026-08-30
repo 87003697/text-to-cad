@@ -179,6 +179,10 @@ class WorkspaceAPI(Protocol):
         self, workspace: Path, *, step: int, offset: int
     ) -> Mapping[str, Any]: ...
 
+    def bind_step_target_section(
+        self, workspace: Path, *, step: int, rank: int
+    ) -> Mapping[str, Any]: ...
+
     def read_current_step_preview_png(self, workspace: Path, *, step: int) -> bytes: ...
 
     def finalize_from_agent_selection_claim(
@@ -448,6 +452,13 @@ def _load_reference_type(meshscope_src: Path | None = None) -> type[Any]:
         from meshscope import ReferenceCapability
 
     return ReferenceCapability
+
+
+def _load_target_section_profile(meshscope_src: Path | None = None) -> Callable[..., Any]:
+    with _shipped_package_import(meshscope_src or _MESHSCOPE_SRC, "meshscope"):
+        from meshscope import target_section_profile
+
+    return target_section_profile
 
 
 def _load_agent_surface_type(product_root: Path | None = None) -> type[Any]:
@@ -826,6 +837,9 @@ class WorkspaceSupervisor:
                     pass
                 self.canonical_build_root = canonical_build_root
                 self.cadgen_runtime_root = cadgen_runtime_root
+            self._target_section_profile = _load_target_section_profile(
+                trusted_meshscope_src
+            )
             self._attempts: dict[int, _AttemptContext] = {}
             self._publication_condition = threading.Condition()
             self._publication_flights: dict[
@@ -1349,6 +1363,7 @@ class WorkspaceSupervisor:
             next_intents.append("start_attempt")
             if workspace_state == "preterminal":
                 next_intents.append("inspect_repair_targets")
+                next_intents.append("observe_target_section")
                 next_intents.append("select_and_finalize")
         result: dict[str, Any] = {
             "state": state,
@@ -2209,6 +2224,32 @@ class WorkspaceSupervisor:
             )
         except Exception as exc:
             raise SupervisorError("repair_targets_unavailable") from exc
+
+    def observe_target_section(
+        self, step_handle: str, rank: int
+    ) -> Mapping[str, Any]:
+        step_number = self.registry.resolve(step_handle, "step")
+        status = self.workspace_status(self.workspace_handle)
+        if "observe_target_section" not in status["permitted_next_intents"]:
+            raise SupervisorError("invalid_operation")
+        try:
+            binding = self.workspace_api.bind_step_target_section(
+                self.workspace, step=step_number, rank=rank
+            )
+            reference = self._target_section_profile(
+                binding["reference_path"], binding["bounds_canonical"]
+            )
+            candidate = self._target_section_profile(
+                binding["candidate_path"], binding["bounds_canonical"]
+            )
+        except Exception as exc:
+            raise SupervisorError("target_section_unavailable") from exc
+        return {
+            "schema": "mesh-to-cad.target-section-observation/1",
+            "rank": rank,
+            "reference": reference,
+            "candidate": candidate,
+        }
 
     def _submit_publication_request(
         self,

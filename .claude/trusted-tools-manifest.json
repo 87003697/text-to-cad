@@ -392,8 +392,8 @@
     },
     {
       "path": "packages/meshscope/src/meshscope/__init__.py",
-      "sha256": "b820d60e29c88a6dfd50c1d8c32957a0572c349dd88f352d0c9879f78633e5ac",
-      "size": 271
+      "sha256": "508ef5c7e56de523021e32492471f9e2dd00cbb847a710b7ce85bf4a94d3cf5a",
+      "size": 329
     },
     {
       "path": "packages/meshscope/src/meshscope/inspect.py",
@@ -407,8 +407,8 @@
     },
     {
       "path": "packages/meshscope/src/meshscope/reference_capability.py",
-      "sha256": "787a3050d2d6377538858cfc7d65f974825684fc2295bfd743933cdd75c80560",
-      "size": 30818
+      "sha256": "64c9206c13ada18d5f623b27d88daee9a6935c1fb941e032df0f1cef1b9bb96b",
+      "size": 32824
     },
     {
       "path": "packages/meshscope/src/meshscope/viewer_glb.py",

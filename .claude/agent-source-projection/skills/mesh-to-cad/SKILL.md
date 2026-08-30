@@ -64,6 +64,9 @@ a closed result plus the list of intents permitted next.
   the exact `next_offset` returned by the previous page to read every committed
   Repair Target through the fixed client. It returns only the public
   `{rank, kind, bounds_canonical}` triples.
+- `observe_target_section` — use a published Step's opaque `step_handle` and
+  one public target rank to compare fixed local Reference and candidate
+  section profiles.
 - `select_and_finalize` — request the supervisor's final result from an
   opaque `step_handle` naming the Selected Step plus an authored
   selection handle (a bounded semantic claim) and notes handle. You do
@@ -94,7 +97,7 @@ handle opaque. There is no `tool`, `argv`, `command`, or
 
 ## Fixed-client transport
 
-Invoke the eight JSON intents through ordinary `exec_command`, running only the
+Invoke the nine JSON intents through ordinary `exec_command`, running only the
 fixed client `python3 /agent-surface/client.py`. Feed it exactly one closed JSON
 object on stdin and read its one JSON response before issuing another intent.
 If a long-running call returns an `exec_command` session ID before its JSON
@@ -132,6 +135,7 @@ The `args` object must have exactly the fields for its intent:
 - `submit_step_zero` and `submit_repair`: `workspace_handle`,
   `attempt_handle`, `candidate_handle`.
 - `inspect_repair_targets`: `step_handle`, `offset`.
+- `observe_target_section`: `step_handle`, `rank`.
 - `select_and_finalize`: `workspace_handle`, `step_handle`,
   `selection_handle`, `notes_handle`.
 - `observe_reference`: `reference_handle` and an `observation` object that is
@@ -147,7 +151,7 @@ Every successful client response is one JSON object with the response envelope:
 {
   "ok": true,
   "response": {
-    "schema": "mesh-to-cad.agent-response/3",
+    "schema": "mesh-to-cad.agent-response/4",
     "intent": "<same intent>",
     "result": { "...": "..." }
   }
@@ -178,6 +182,10 @@ Each intent has its own closed result shape:
   `remaining`, `offset`, `next_offset`, `items`. Its schema is
   `mesh-to-cad.repair-target-page/1`; every item is exactly
   `{rank, kind, bounds_canonical}`.
+- `observe_target_section`: exactly `schema`, `rank`, `reference`, and
+  `candidate`, with schema `mesh-to-cad.target-section-observation/1`.
+  Each side contains only `triangle_count` and fixed X/Y/Z eight-slab
+  `profiles`.
 
 `observe_reference` is not a workflow-state response. Its `result` is exactly
 `{"observation":{"method":"<method>","value":{...}}}`. A `summary` value
@@ -541,6 +549,13 @@ Rules for using decision facts:
   the complete attention order; do not guess a rank or treat the first eight
   as a priority shortlist. Copy a selected target's public
   `{rank, kind, bounds_canonical}` triple unchanged into the repair plan.
+  Before writing the plan, call `observe_target_section` for the small set of
+  competing or semantically relevant targets you are considering. Do not
+  observe every target. This local geometry cannot change `kind`, replace the
+  Reconstruction Spec, identify a Component, or establish semantic ownership.
+  If either side has only one or two triangles, treat it as
+  `ambiguous_low_sample` and make no directional or semantic claim from its
+  normals.
 - Compare candidate frontiers lexicographically: a greater `active_depth`
   is better; at the same depth, a smaller `surface_error_count` is better.
   Equal depth and error count is a tie. Use missing and excess counts for
@@ -569,8 +584,9 @@ The bounded loop the supervisor enforces is:
 5. Inspect the returned formal preview. If the first Repair Target page has
    `remaining > 0`, call `inspect_repair_targets` at offset `0`, then follow
    every `next_offset` on the same Step before selecting a target. Then create
-   or update the
-   Reconstruction Spec before forming a repair hypothesis. Replace
+   or update the Reconstruction Spec. Observe the few competing or semantically
+   relevant target ranks with `observe_target_section` before forming a repair
+   hypothesis; preserve low-sample ambiguity and do not infer Components. Replace
    `/candidate/plan.json` with a `voxblame.repair-batch/1` that repeats the
    selected coarse target's `{rank, kind, bounds_canonical}` facts.
    Bind every Planned Edit to one existing semantic Component with

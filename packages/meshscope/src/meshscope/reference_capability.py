@@ -20,6 +20,7 @@ import numpy as np
 import trimesh
 
 from meshscope.inspect import _compute_quality, _compute_stats
+from meshscope.io import load
 from meshscope.voxblame.contracts import BOUNDARY_EPSILON, COORDINATE_CONTRACT
 
 
@@ -113,6 +114,148 @@ def _pair(values: Any) -> list[float]:
     if len(array) != 2:
         _fail("invalid_reference_material")
     return [_number(value) for value in array]
+
+
+def _empty_section_profiles() -> list[dict[str, Any]]:
+    axis_names = ("x", "y", "z")
+    profiles: list[dict[str, Any]] = []
+    for axis, axis_name in enumerate(axis_names):
+        other_axes = [name for index, name in enumerate(axis_names) if index != axis]
+        profiles.append(
+            {
+                "axis": axis_name,
+                "occupied_axes": other_axes,
+                "slabs": [
+                    {
+                        "canonical_interval": [
+                            _number(CANONICAL_MIN + index / SECTION_PROFILE_BINS),
+                            _number(CANONICAL_MIN + (index + 1) / SECTION_PROFILE_BINS),
+                        ],
+                        "occupied_extents": None,
+                        "surface_area_fraction": 0.0,
+                        "mean_abs_normal": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    }
+                    for index in range(SECTION_PROFILE_BINS)
+                ],
+            }
+        )
+    return profiles
+
+
+def _section_profiles(triangles: np.ndarray) -> list[dict[str, Any]]:
+    """Project a finite triangle selection into the fixed canonical slabs."""
+
+    if triangles.shape == (0, 3, 3):
+        return _empty_section_profiles()
+    edge_left = triangles[:, 1] - triangles[:, 0]
+    edge_right = triangles[:, 2] - triangles[:, 0]
+    cross = np.cross(edge_left, edge_right)
+    doubled_area = np.linalg.norm(cross, axis=1)
+    areas = doubled_area / 2.0
+    if (
+        not np.all(np.isfinite(triangles))
+        or not np.all(np.isfinite(areas))
+        or np.any(areas <= 0.0)
+        or not np.isfinite(float(np.sum(areas)))
+    ):
+        _fail("invalid_reference_material")
+    total_area = float(np.sum(areas))
+    normals = cross / doubled_area[:, None]
+    centroids = np.mean(triangles, axis=1, dtype=np.float64)
+    axis_names = ("x", "y", "z")
+    profiles: list[dict[str, Any]] = []
+    for axis, axis_name in enumerate(axis_names):
+        other_axes = tuple(index for index in range(3) if index != axis)
+        positions = (centroids[:, axis] - CANONICAL_MIN) / (
+            CANONICAL_MAX - CANONICAL_MIN
+        )
+        bin_indices = np.clip(
+            (positions * SECTION_PROFILE_BINS).astype(np.int64),
+            0,
+            SECTION_PROFILE_BINS - 1,
+        )
+        slabs: list[dict[str, Any]] = []
+        for bin_index in range(SECTION_PROFILE_BINS):
+            selected = bin_indices == bin_index
+            interval = [
+                _number(CANONICAL_MIN + bin_index / SECTION_PROFILE_BINS),
+                _number(CANONICAL_MIN + (bin_index + 1) / SECTION_PROFILE_BINS),
+            ]
+            if not np.any(selected):
+                slabs.append(
+                    {
+                        "canonical_interval": interval,
+                        "occupied_extents": None,
+                        "surface_area_fraction": 0.0,
+                        "mean_abs_normal": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    }
+                )
+                continue
+            selected_triangles = triangles[selected]
+            selected_areas = areas[selected]
+            selected_area = float(np.sum(selected_areas))
+            extents = selected_triangles[..., list(other_axes)].reshape(-1, 2)
+            orientation = (
+                selected_areas[:, None] * np.abs(normals[selected])
+            ).sum(axis=0) / selected_area
+            slabs.append(
+                {
+                    "canonical_interval": interval,
+                    "occupied_extents": {
+                        "min": _pair(extents.min(axis=0)),
+                        "max": _pair(extents.max(axis=0)),
+                    },
+                    "surface_area_fraction": _number(selected_area / total_area),
+                    "mean_abs_normal": {
+                        name: _number(value)
+                        for name, value in zip(axis_names, orientation)
+                    },
+                }
+            )
+        profiles.append(
+            {
+                "axis": axis_name,
+                "occupied_axes": [axis_names[index] for index in other_axes],
+                "slabs": slabs,
+            }
+        )
+    return profiles
+
+
+def target_section_profile(
+    mesh_path: str | Path, bounds_canonical: dict[str, list[float]]
+) -> dict[str, Any]:
+    """Return the fixed profile for triangle centroids inside one target box."""
+
+    mesh = load(mesh_path)
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    if (
+        vertices.ndim != 2
+        or vertices.shape[1] != 3
+        or faces.ndim != 2
+        or faces.shape[1] != 3
+        or not np.all(np.isfinite(vertices))
+    ):
+        _fail("invalid_reference_material")
+    lower = np.asarray(bounds_canonical["min"], dtype=np.float64)
+    upper = np.asarray(bounds_canonical["max"], dtype=np.float64)
+    if (
+        lower.shape != (3,)
+        or upper.shape != (3,)
+        or not np.all(np.isfinite(lower))
+        or not np.all(np.isfinite(upper))
+        or np.any(lower > upper)
+    ):
+        _fail("invalid_reference_material")
+    triangles = vertices[faces]
+    centroids = np.mean(triangles, axis=1, dtype=np.float64)
+    selected = np.all((centroids >= lower) & (centroids <= upper), axis=1)
+    cropped = triangles[selected]
+    return {
+        "triangle_count": int(len(cropped)),
+        "profiles": _section_profiles(cropped),
+    }
 
 
 def _matrix(values: Any) -> list[list[float]]:
@@ -799,83 +942,12 @@ class ReferenceCapability:
 
         if self._section_profile is None:
             triangles = self._vertices[self._mesh.faces]
-            edge_left = triangles[:, 1] - triangles[:, 0]
-            edge_right = triangles[:, 2] - triangles[:, 0]
-            cross = np.cross(edge_left, edge_right)
-            doubled_area = np.linalg.norm(cross, axis=1)
-            areas = doubled_area / 2.0
-            if (
-                not np.all(np.isfinite(areas))
-                or np.any(areas <= 0.0)
-                or not np.isfinite(float(np.sum(areas)))
-            ):
-                _fail("invalid_reference_material")
-            total_area = float(np.sum(areas))
-            normals = cross / doubled_area[:, None]
-            centroids = np.mean(triangles, axis=1, dtype=np.float64)
-            axis_names = ("x", "y", "z")
-            profiles: list[dict[str, Any]] = []
-            for axis, axis_name in enumerate(axis_names):
-                other_axes = tuple(index for index in range(3) if index != axis)
-                positions = (centroids[:, axis] - CANONICAL_MIN) / (
-                    CANONICAL_MAX - CANONICAL_MIN
-                )
-                bin_indices = np.minimum(
-                    (positions * SECTION_PROFILE_BINS).astype(np.int64),
-                    SECTION_PROFILE_BINS - 1,
-                )
-                bin_indices = np.maximum(bin_indices, 0)
-                slabs: list[dict[str, Any]] = []
-                for bin_index in range(SECTION_PROFILE_BINS):
-                    selected = bin_indices == bin_index
-                    interval = [
-                        _number(CANONICAL_MIN + bin_index / SECTION_PROFILE_BINS),
-                        _number(CANONICAL_MIN + (bin_index + 1) / SECTION_PROFILE_BINS),
-                    ]
-                    if not np.any(selected):
-                        slabs.append(
-                            {
-                                "canonical_interval": interval,
-                                "occupied_extents": None,
-                                "surface_area_fraction": 0.0,
-                                "mean_abs_normal": {"x": 0.0, "y": 0.0, "z": 0.0},
-                            }
-                        )
-                        continue
-                    selected_triangles = triangles[selected]
-                    selected_areas = areas[selected]
-                    selected_area = float(np.sum(selected_areas))
-                    extents = selected_triangles[..., list(other_axes)].reshape(-1, 2)
-                    orientation = (
-                        selected_areas[:, None] * np.abs(normals[selected])
-                    ).sum(axis=0) / selected_area
-                    slabs.append(
-                        {
-                            "canonical_interval": interval,
-                            "occupied_extents": {
-                                "min": _pair(extents.min(axis=0)),
-                                "max": _pair(extents.max(axis=0)),
-                            },
-                            "surface_area_fraction": _number(selected_area / total_area),
-                            "mean_abs_normal": {
-                                axis_name: _number(value)
-                                for axis_name, value in zip(axis_names, orientation)
-                            },
-                        }
-                    )
-                profiles.append(
-                    {
-                        "axis": axis_name,
-                        "occupied_axes": [axis_names[index] for index in other_axes],
-                        "slabs": slabs,
-                    }
-                )
             self._section_profile = {
                 "schema": SECTION_PROFILE_SCHEMA,
                 "coordinate_contract": COORDINATE_CONTRACT,
                 "bin_count": SECTION_PROFILE_BINS,
-                "profiles": profiles,
+                "profiles": _section_profiles(triangles),
             }
         return deepcopy(self._section_profile)
 
-__all__ = ["ReferenceCapability", "ReferenceCapabilityError"]
+__all__ = ["ReferenceCapability", "ReferenceCapabilityError", "target_section_profile"]

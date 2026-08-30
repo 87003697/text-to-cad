@@ -22,7 +22,8 @@ fixture rather than adding a dependency.
 Agent requests use the closed `mesh-to-cad.agent-intent/1` envelope and only
 the following intents: `workspace_status`, `start_attempt`,
 `run_candidate_tool`, `submit_step_zero`, `submit_repair`,
-`inspect_repair_targets`, `select_and_finalize`, and `observe_reference`.
+`inspect_repair_targets`, `observe_target_section`, `select_and_finalize`, and
+`observe_reference`.
 Workspace, Attempt, candidate,
 plan, evidence, selection, notes, and reference values cross this seam only as
 opaque handles. `run_candidate_tool` accepts a supervisor-registered operation
@@ -66,6 +67,16 @@ consecutive page start or `null`; target keys, masks, paths, and raw octree
 identities remain behind the supervisor. Paging is available only between
 Attempts, so an active Attempt cannot mix target observations from another
 workflow state. An empty target set has one valid empty page at offset zero.
+
+`observe_target_section` accepts exactly a returned historical `step_handle`
+and one public target `rank`, and is available only between Attempts in the
+preterminal state. W1 resolves that rank through the same committed directional
+target projection as paging, while W3 privately binds the canonical Reference
+and that Step's committed candidate mesh. Its
+`mesh-to-cad.target-section-observation/1` result contains only the rank plus
+Reference and candidate triangle counts and fixed X/Y/Z eight-slab profiles.
+It mints no handle, accepts no arbitrary bounds, and exposes no target key,
+mask, path, Depth-8 identity, Component, or capability detail.
 
 The standalone adapters have no supervisor discovery fallback: without W4
 ports they return a closed `supervisor_unavailable` error. W4 owns the concrete

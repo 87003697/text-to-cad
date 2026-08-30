@@ -3,6 +3,7 @@ from meshscope.io import load
 from meshscope.reference_capability import (
     ReferenceCapability,
     ReferenceCapabilityError,
+    target_section_profile,
 )
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     "load",
     "ReferenceCapability",
     "ReferenceCapabilityError",
+    "target_section_profile",
 ]

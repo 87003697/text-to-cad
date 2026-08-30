@@ -716,6 +716,14 @@ def supervise_provider_free_installed_plugin(
                 interval=interval,
                 env=provider_free.build_runner_env(os.environ),
             )
+            if process_status != 0:
+                return transition(
+                    root,
+                    handle,
+                    "failed",
+                    process_exit_code=process_status,
+                    failure_reason=f"provider-free runner exited {process_status}",
+                )
             if record.get("scenario") == "workspace-repair-chain":
                 evidence_path, manifest_path = provider_free.validate_artifacts(
                     REPO_ROOT,
@@ -735,15 +743,7 @@ def supervise_provider_free_installed_plugin(
                 "provider_free_evidence": _relative(evidence_path),
                 "process_exit_code": process_status,
             }
-            if process_status == 0:
-                return transition(root, handle, "succeeded", **updates)
-            return transition(
-                root,
-                handle,
-                "failed",
-                failure_reason=f"provider-free runner exited {process_status}",
-                **updates,
-            )
+            return transition(root, handle, "succeeded", **updates)
         except Exception as error:
             current = load_state(root, handle)
             if current["state"] in {"submitted", "running"}:
