@@ -56,6 +56,10 @@ or non-string values fail closed.
    visible there. Record semantic Components for the fuselage/body, left and
    right main wings, horizontal tailplane, and vertical fin with their canonical
    bounds; do not record paths, bytes, or handles.
+   For each Repair Planned Edit, use `spec_region_id` to name exactly one
+   existing semantic Component. Every target rank assigned to that edit must
+   have strictly positive volume overlap with the Component's canonical bounds;
+   face, edge, or point contact does not count.
 3. Read `residual_summary.repair_frontier.active_depth` first. When it is
    non-null, use the active-depth interior targets and their
    `bounds_canonical` values to pick one residual you can plausibly move with

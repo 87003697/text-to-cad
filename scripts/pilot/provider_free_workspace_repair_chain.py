@@ -29,6 +29,7 @@ SCENARIO = "workspace-repair-chain"
 EVIDENCE_SCHEMA_V1 = "text-to-cad.provider-free-workspace-repair-chain-evidence/1"
 EVIDENCE_SCHEMA_V2 = "text-to-cad.provider-free-workspace-repair-chain-evidence/2"
 EVIDENCE_SCHEMA_V3 = "text-to-cad.provider-free-workspace-repair-chain-evidence/3"
+EVIDENCE_SCHEMA_V4 = "text-to-cad.provider-free-workspace-repair-chain-evidence/4"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
@@ -112,6 +113,24 @@ def _fixture(path: Path) -> None:
 def _source(path: Path, width: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"from build123d import Box\n\ndef gen_step():\n    return Box({width}, 0.5, 0.25)\n", encoding="utf-8")
+
+
+def _spec(path: Path, region_id: str, bounds: Mapping[str, Any]) -> bytes:
+    value = {"components": [{"id": region_id, "bounds_canonical": bounds}], "features": [], "relations": []}
+    _json(path, value)
+    return path.read_bytes()
+
+
+def _surface_call(socket_path: Path, request: Mapping[str, Any]) -> dict[str, Any]:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.connect(os.fspath(socket_path))
+        stream = conn.makefile("rwb")
+        stream.write(json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n")
+        stream.flush()
+        response = json.loads(stream.readline())
+    if not isinstance(response, dict):
+        raise ProviderFreeError("Agent Surface bridge returned invalid response")
+    return response
 
 
 def _mcp_call(socket_path: Path, handle: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -306,8 +325,10 @@ def _validate_v2_artifacts(
     except (OSError, json.JSONDecodeError) as exc:
         raise ProviderFreeError("v2 evidence missing or invalid") from exc
     required = {"schema", "identity", "scenario", "gate_passed", "selection", "steps", "graph", "previews", "mcp", "workspace_validation", "module_paths", "runtime", "final", "cycles"}
-    if schema == EVIDENCE_SCHEMA_V3:
+    if schema in {EVIDENCE_SCHEMA_V3, EVIDENCE_SCHEMA_V4}:
         required.add("spec_persistence")
+    if schema == EVIDENCE_SCHEMA_V4:
+        required.add("spec_region_binding")
     if not isinstance(evidence, dict) or set(evidence) != required or evidence.get("schema") != schema or evidence.get("identity") != expected_identity(record) or evidence.get("scenario") != SCENARIO or evidence.get("gate_passed") is not True:
         raise ProviderFreeError("invalid v2 evidence shape")
     selection = evidence["selection"]
@@ -345,6 +366,11 @@ def _validate_v2_artifacts(
         diff = docs["diff"]
         if plan.get("from_step") != cycle["from_step"] or cycle["selected_parent_target"] not in plan.get("selected_targets", []) or not any(edit.get("target_ranks") == [cycle["selected_parent_target"]["rank"]] for edit in plan.get("planned_edits", [])):
             raise ProviderFreeError("cycle plan target binding mismatch")
+        if schema == EVIDENCE_SCHEMA_V4:
+            if any(edit.get("spec_region_id") != "component.primary" for edit in plan.get("planned_edits", [])):
+                raise ProviderFreeError("cycle Spec Region binding mismatch")
+            if any("spec_region_id" in edit for edit in diff.get("repair_batch", {}).get("planned_edits", [])):
+                raise ProviderFreeError("Region Diff leaked Spec Region binding")
         if assessment.get("from_step") != cycle["from_step"] or assessment.get("to_step") != cycle["to_step"]:
             raise ProviderFreeError("cycle assessment edge mismatch")
         if cycle_doc.get("cycle") != cycle["to_step"] or cycle_doc.get("from_step") != cycle["from_step"] or cycle_doc.get("to_step") != cycle["to_step"]:
@@ -430,20 +456,21 @@ def _validate_v2_artifacts(
         raise ProviderFreeError("final source is not selected-step source")
     if (exp_dir / "final/measurement.json").read_bytes() != (exp_dir / f"steps/{selection['selected_step']:06d}/measurement.json").read_bytes():
         raise ProviderFreeError("final measurement is not selected-step measurement")
-    expected_manifest = {"schema": f"text-to-cad.provider-free-artifact-manifest/{3 if schema == EVIDENCE_SCHEMA_V3 else 2}", "final_status": 0, "identity": expected_identity(record), "evidence": {"path": evidence_path.name}}
+    manifest_version = 4 if schema == EVIDENCE_SCHEMA_V4 else 3 if schema == EVIDENCE_SCHEMA_V3 else 2
+    expected_manifest = {"schema": f"text-to-cad.provider-free-artifact-manifest/{manifest_version}", "final_status": 0, "identity": expected_identity(record), "evidence": {"path": evidence_path.name}}
     if not isinstance(manifest, dict) or manifest != expected_manifest:
         raise ProviderFreeError("invalid v2 manifest")
     if final.get("identity_bound") is not True:
         raise ProviderFreeError("final identity binding was not derived")
     if final_manifest.get("selected_step") != selection["selected_step"] or final_manifest.get("selected_step") == steps["repair_b"]["ordinal"]:
         raise ProviderFreeError("final manifest selected wrong step")
-    if schema == EVIDENCE_SCHEMA_V3:
+    if schema in {EVIDENCE_SCHEMA_V3, EVIDENCE_SCHEMA_V4}:
         spec = evidence["spec_persistence"]
         expected_spec = {
             "seam": "runner.persist_agent_reconstruction_spec",
             "path": runner.RECONSTRUCTION_SPEC_RELATIVE.as_posix(),
             "enabled_status": 0,
-            "updated_bytes": len(SPEC_FINAL_BYTES),
+            "updated_bytes": len(SPEC_FINAL_BYTES) if schema == EVIDENCE_SCHEMA_V3 else spec["updated_bytes"],
             "disabled_absent": True,
             "workspace_authority_absent": True,
             "missing_status": 1,
@@ -451,8 +478,18 @@ def _validate_v2_artifacts(
         }
         if spec != expected_spec:
             raise ProviderFreeError("invalid Reconstruction Spec persistence evidence")
-        if (exp_dir / runner.RECONSTRUCTION_SPEC_RELATIVE).read_bytes() != SPEC_FINAL_BYTES:
+        persisted_spec = exp_dir / runner.RECONSTRUCTION_SPEC_RELATIVE
+        if schema == EVIDENCE_SCHEMA_V3 and persisted_spec.read_bytes() != SPEC_FINAL_BYTES:
             raise ProviderFreeError("persisted Reconstruction Spec bytes changed")
+        if schema == EVIDENCE_SCHEMA_V4 and (not isinstance(spec["updated_bytes"], int) or spec["updated_bytes"] <= 0 or persisted_spec.stat().st_size != spec["updated_bytes"]):
+            raise ProviderFreeError("persisted Reconstruction Spec size mismatch")
+    if schema == EVIDENCE_SCHEMA_V4:
+        binding = evidence["spec_region_binding"]
+        if not isinstance(binding, dict) or set(binding) != {"region_id", "cycles", "negative_cases", "authority_absent"} or binding.get("region_id") != "component.primary" or binding.get("cycles") != 2 or binding.get("authority_absent") is not True:
+            raise ProviderFreeError("invalid Spec Region binding evidence")
+        negatives = binding["negative_cases"]
+        if not isinstance(negatives, list) or len(negatives) != 2 or [item.get("case") for item in negatives] != ["unknown_id", "zero_overlap"] or any(item.get("error") != "supervisor_failure" or item.get("attempt_created") is not False or item.get("public_no_leak") is not True for item in negatives):
+            raise ProviderFreeError("invalid Spec Region negative evidence")
     return evidence_path, artifact_manifest_path
 
 
@@ -468,6 +505,8 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
         return _validate_v2_artifacts(repo_root, record)
     if schema == EVIDENCE_SCHEMA_V3:
         return _validate_v2_artifacts(repo_root, record, schema=EVIDENCE_SCHEMA_V3)
+    if schema == EVIDENCE_SCHEMA_V4:
+        return _validate_v2_artifacts(repo_root, record, schema=EVIDENCE_SCHEMA_V4)
     raise ProviderFreeError("unknown evidence schema")
 
 
@@ -501,7 +540,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         candidate_root = exp_dir.parent / f".agent-candidate-repair-chain-{os.getpid()}"
         registry = runner.publish_tool_registry(sidecar.capability_dir, rebuild_entrypoint=published_rebuild, geometry_entrypoint=published_geometry)
         registry_document = json.loads(registry.read_text(encoding="utf-8"))
-        supervisor = WorkspaceSupervisor(exp_dir, bind_reference=True, candidate_root=candidate_root, rebuild_entrypoint=published_rebuild, geometry_entrypoint=published_geometry, tool_registry=registry, browser_runtime_capability=sidecar.capability_dir / "runtime.json", candidate_runtime=candidate_lease.runtime, trusted_tools_root=trusted, trusted_product_root=trusted, step_zero_evidence_provider=lambda req: runner.real_step_zero_evidence_provider(req, capability_path=sidecar.capability_dir / "runtime.json", meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src", meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src"), repair_evidence_provider=lambda req: runner.real_repair_evidence_provider(req, capability_path=sidecar.capability_dir / "runtime.json", meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src", meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src"))
+        supervisor = WorkspaceSupervisor(exp_dir, bind_reference=True, candidate_root=candidate_root, rebuild_entrypoint=published_rebuild, geometry_entrypoint=published_geometry, tool_registry=registry, browser_runtime_capability=sidecar.capability_dir / "runtime.json", candidate_runtime=candidate_lease.runtime, trusted_tools_root=trusted, trusted_product_root=trusted, reconstruction_spec=True, step_zero_evidence_provider=lambda req: runner.real_step_zero_evidence_provider(req, capability_path=sidecar.capability_dir / "runtime.json", meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src", meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src"), repair_evidence_provider=lambda req: runner.real_repair_evidence_provider(req, capability_path=sidecar.capability_dir / "runtime.json", meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src", meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src"))
         socket_dir = Path(tempfile.mkdtemp(prefix="ttc-a-", dir="/tmp"))
         bridge = AgentSurfaceBridge(supervisor.agent_surface(), socket_dir / "surface.sock", trusted_product_root=trusted)
         bridge.start(); sidecar.start(); sidecar.preflight(); sidecar.preflight_mcp()
@@ -525,14 +564,37 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         if not isinstance(items, list) or not items:
             raise ProviderFreeError("Step 0 repair frontier is invalid")
         active = items[0]
-        _json(plan, {"schema": "voxblame.repair-batch/1", "from_step": 0, "selected_targets": [active], "planned_edits": [{"edit_key": "expand-primary", "target_ranks": [active["rank"]], "description": "expand the primary box"}], "rationale": "expand the measured candidate", "preview_observation": "the candidate is narrower than the reference"})
+        spec_path = candidate_root / "reconstruction-spec.json"
+        spec_bytes = _spec(spec_path, "component.primary", active["bounds_canonical"])
+        start_request = {"schema": "mesh-to-cad.agent-intent/1", "intent": "start_attempt", "args": {"workspace_handle": wh, "plan_handle": ph, "parent_step_handle": s0["step_handle"]}}
+        def attempt_documents() -> set[str]:
+            return {path.relative_to(exp_dir).as_posix() for root in (exp_dir / "attempts", exp_dir / "work/attempts") if root.exists() for path in root.glob("*/attempt.json")}
+        negative_cases: list[dict[str, Any]] = []
+        for case, region_id, region_bounds in (
+            ("unknown_id", "component.unknown", active["bounds_canonical"]),
+            ("zero_overlap", "component.primary", {"min": [active["bounds_canonical"]["max"][0], active["bounds_canonical"]["min"][1], active["bounds_canonical"]["min"][2]], "max": [active["bounds_canonical"]["max"][0] + 0.1, active["bounds_canonical"]["max"][1], active["bounds_canonical"]["max"][2]]}),
+        ):
+            _spec(spec_path, "component.primary", region_bounds)
+            _json(plan, {"schema": "voxblame.repair-batch/1", "from_step": 0, "selected_targets": [active], "planned_edits": [{"edit_key": "negative", "target_ranks": [active["rank"]], "spec_region_id": region_id, "description": "negative binding probe"}], "rationale": "exercise the rejected binding", "preview_observation": "the parent preview was inspected"})
+            before = attempt_documents()
+            response = _surface_call(bridge.socket_path, start_request)
+            public_text = _public(response)
+            after = attempt_documents()
+            classification = response.get("error", {}).get("classification") if isinstance(response.get("error"), dict) else response.get("error")
+            if response.get("ok") is not False or classification != "supervisor_failure" or before != after:
+                raise ProviderFreeError(f"Spec Region negative case failed: {case}")
+            negative_cases.append({"case": case, "error": classification, "attempt_created": False, "public_no_leak": bool(public_text)})
+        spec_bytes = _spec(spec_path, "component.primary", active["bounds_canonical"])
+        _json(plan, {"schema": "voxblame.repair-batch/1", "from_step": 0, "selected_targets": [active], "planned_edits": [{"edit_key": "expand-primary", "target_ranks": [active["rank"]], "spec_region_id": "component.primary", "description": "expand the primary box"}], "rationale": "expand the measured candidate", "preview_observation": "the candidate is narrower than the reference"})
         def submit_child(parent: Mapping[str, Any], parent_ordinal: int, next_ordinal: int, width: float, edit_key: str, edit_description: str, assessment_observation: str, assessment_summary: str) -> tuple[dict[str, Any], bytes, dict[str, Any]]:
             parent_facts = parent["decision_facts"]
             parent_targets = parent_facts.get("repair_targets", {}).get("items", [])
             if not isinstance(parent_targets, list) or not parent_targets:
                 raise ProviderFreeError("child parent has no repair target")
             target = parent_targets[0]
-            _json(plan, {"schema": "voxblame.repair-batch/1", "from_step": parent_ordinal, "selected_targets": [target], "planned_edits": [{"edit_key": edit_key, "target_ranks": [target["rank"]], "description": edit_description}], "rationale": edit_description, "preview_observation": "the parent frontier identifies the active repair target"})
+            nonlocal spec_bytes
+            spec_bytes = _spec(spec_path, "component.primary", target["bounds_canonical"])
+            _json(plan, {"schema": "voxblame.repair-batch/1", "from_step": parent_ordinal, "selected_targets": [target], "planned_edits": [{"edit_key": edit_key, "target_ranks": [target["rank"]], "spec_region_id": "component.primary", "description": edit_description}], "rationale": edit_description, "preview_observation": "the parent frontier identifies the active repair target"})
             attempt = surface.handle({"schema": "mesh-to-cad.agent-intent/1", "intent": "start_attempt", "args": {"workspace_handle": wh, "plan_handle": ph, "parent_step_handle": parent["step_handle"]}}); _public(attempt)
             child = attempt["result"]
             _source(candidate_root / "work/source/model.py", width)
@@ -593,15 +655,12 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             raise ProviderFreeError("runner interpreter is outside repository runtime") from exc
         if runner_interpreter_relative != ".venv/bin/python":
             raise ProviderFreeError("provider-free runner did not use repository venv")
-        spec_path = candidate_root / "reconstruction-spec.json"
-        spec_path.write_bytes(SPEC_INITIAL_BYTES)
-        spec_path.write_bytes(SPEC_FINAL_BYTES)
         enabled_status = runner.persist_agent_reconstruction_spec(exp_dir, candidate_root, enabled=True, workload_status=0)
         disabled_exp = fixture_root / "disabled-exp"
         disabled_candidate = fixture_root / "disabled-candidate"
         (disabled_exp / "run").mkdir(parents=True)
         disabled_candidate.mkdir()
-        (disabled_candidate / "reconstruction-spec.json").write_bytes(SPEC_FINAL_BYTES)
+        (disabled_candidate / "reconstruction-spec.json").write_bytes(spec_bytes)
         runner.persist_agent_reconstruction_spec(disabled_exp, disabled_candidate, enabled=False, workload_status=0)
         missing_candidate = fixture_root / "missing-candidate"
         missing_candidate.mkdir()
@@ -614,8 +673,9 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             for path in root.rglob("*")
         )
         spec_persistence = {"seam": "runner.persist_agent_reconstruction_spec", "path": runner.RECONSTRUCTION_SPEC_RELATIVE.as_posix(), "enabled_status": enabled_status, "updated_bytes": len((exp_dir / runner.RECONSTRUCTION_SPEC_RELATIVE).read_bytes()), "disabled_absent": not (disabled_exp / runner.RECONSTRUCTION_SPEC_RELATIVE).exists(), "workspace_authority_absent": workspace_authority_absent, "missing_status": missing_status, "prior_failure_status": prior_failure_status}
-        evidence = {"schema": EVIDENCE_SCHEMA_V3, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence}
-        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/3", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record); return 0
+        spec_region_binding = {"region_id": "component.primary", "cycles": 2, "negative_cases": negative_cases, "authority_absent": workspace_authority_absent}
+        evidence = {"schema": EVIDENCE_SCHEMA_V4, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence, "spec_region_binding": spec_region_binding}
+        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/4", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record); return 0
     finally:
         for resource, action in ((bridge, "stop"), (supervisor, "close"), (candidate_lease, "release"), (sidecar, "stop")):
             if resource is None: continue

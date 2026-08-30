@@ -56,7 +56,10 @@ the plan and stop reason.
 
 Select at least one target and write at least one Planned Edit. Every selected
 target must be mapped by an edit. Keys are stable lowercase identifiers. The
-plan records intent; it does not copy objective measurement fields.
+plan records intent; it does not copy objective measurement fields. The cycle
+freezes the original Agent plan, including `spec_region_id` when Reconstruction
+Spec is enabled and the field is present; the provider's Region Diff projection
+does not copy `spec_region_id`.
 
 ## Cycle assessment
 

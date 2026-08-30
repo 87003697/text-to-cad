@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import secrets
@@ -721,6 +722,7 @@ class WorkspaceSupervisor:
         step_zero_evidence_provider: Callable[..., Any] | None = None,
         repair_evidence_provider: Callable[..., Any] | None = None,
         trusted_product_root: Path | None = None,
+        reconstruction_spec: bool = False,
     ) -> None:
         raw_workspace = Path(workspace)
         if raw_workspace.is_symlink():
@@ -772,6 +774,7 @@ class WorkspaceSupervisor:
             self._step_zero_evidence_provider = step_zero_evidence_provider
             self._repair_evidence_provider = repair_evidence_provider
             self._trusted_product_root = Path(trusted_product_root).resolve() if trusted_product_root is not None else None
+            self._reconstruction_spec = reconstruction_spec
             self.candidate_runtime: Path | None = None
             if candidate_runtime is not None:
                 raw_runtime = Path(candidate_runtime)
@@ -1434,6 +1437,8 @@ class WorkspaceSupervisor:
         context: _AttemptContext | None = None
         try:
             _copy_candidate_file(plan, staged_plan)
+            if self._reconstruction_spec and from_step is not None:
+                self._validate_spec_region_bindings(staged_plan)
             status = self.workspace_api.workspace_status(workspace)
             raw_intended_step = status.get("next_intended_step", 0)
             if (
@@ -1519,6 +1524,75 @@ class WorkspaceSupervisor:
             "capability_bundle_handle": capability_bundle_handle,
             "permitted_next_intents": self._attempt_next_intents(intended_step),
         }
+
+    def _validate_spec_region_bindings(self, plan_path: Path) -> None:
+        try:
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            spec = json.loads(
+                (self.candidate_root / "reconstruction-spec.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            targets: dict[Any, Any] = {}
+            for target in plan["selected_targets"]:
+                self._canonical_bounds(target["bounds_canonical"])
+                targets[target["rank"]] = target["bounds_canonical"]
+            components = spec["components"]
+            if not isinstance(components, list):
+                raise ValueError
+            regions: dict[str, Any] = {}
+            for component in components:
+                if not isinstance(component, Mapping):
+                    raise ValueError
+                region_id = component["id"]
+                if (
+                    not isinstance(region_id, str)
+                    or not region_id.strip()
+                    or region_id != region_id.strip()
+                    or region_id in regions
+                ):
+                    raise ValueError
+                self._canonical_bounds(component["bounds_canonical"])
+                regions[region_id] = component["bounds_canonical"]
+            for edit in plan["planned_edits"]:
+                region_id = edit["spec_region_id"]
+                if not isinstance(region_id, str) or not region_id or region_id not in regions:
+                    raise ValueError
+                for rank in edit["target_ranks"]:
+                    if not self._bounds_overlap_strict(regions[region_id], targets[rank]):
+                        raise ValueError
+        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            raise SupervisorError("attempt_rejected") from None
+
+    @staticmethod
+    def _canonical_bounds(value: Any) -> tuple[list[float], list[float]]:
+        if not isinstance(value, Mapping) or set(value) != {"min", "max"}:
+            raise ValueError
+        low, high = value["min"], value["max"]
+        if (
+            not isinstance(low, list)
+            or not isinstance(high, list)
+            or len(low) != 3
+            or len(high) != 3
+            or any(
+                isinstance(item, bool) or not isinstance(item, (int, float))
+                or not math.isfinite(item)
+                for item in low + high
+            )
+            or any(lo >= hi for lo, hi in zip(low, high))
+        ):
+            raise ValueError
+        return low, high
+
+    @classmethod
+    def _bounds_overlap_strict(cls, left: Any, right: Any) -> bool:
+        left_min, left_max = cls._canonical_bounds(left)
+        right_min, right_max = cls._canonical_bounds(right)
+        return all(
+            max(left_min[index], right_min[index])
+            < min(left_max[index], right_max[index])
+            for index in range(3)
+        )
 
     def _issue_attempt_capabilities(self, context: _AttemptContext) -> str:
         """Bind one single-use canonical-build bundle to the actual Attempt.

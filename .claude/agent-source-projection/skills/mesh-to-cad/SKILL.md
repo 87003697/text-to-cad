@@ -293,6 +293,7 @@ evidence, previews, manifests, and export artifacts.
       {
         "edit_key": "edit-key",
         "target_ranks": [0],
+        "spec_region_id": "component.fuselage",
         "description": "Agent-authored modeling change"
       }
     ],
@@ -305,6 +306,10 @@ evidence, previews, manifests, and export artifacts.
   unique; each selected target repeats only its returned rank, kind, and
   canonical bounds. Every selected target must be covered by one or more
   planned edits, and every target/edit list and prose field must be nonempty.
+  When Reconstruction Spec is enabled, every Planned Edit must name exactly one
+  existing Component `id` in `spec_region_id`. Each target named by that edit
+  must have strictly positive three-axis volume overlap with that Component's
+  `bounds_canonical`; face, edge, or point contact does not count.
 - `/candidate/work/assessment.json` is Repair-only and must have exactly
   `{schema, from_step, to_step, preview_observation, summary}` with schema
   `mesh-to-cad.assessment/1`. Bind `from_step` to the parent and `to_step` to
@@ -346,7 +351,7 @@ evidence, previews, manifests, and export artifacts.
 
   Components require an `id` and `bounds_canonical`; Features require an `id`;
   Relations require `id`, `kind`, `from`, and `to`. Component bounds are
-  finite three-axis canonical `{min,max}` arrays with `min <= max` per axis.
+  finite three-axis canonical `{min,max}` arrays with `min < max` on every axis.
   IDs are globally unique, relation endpoints name an
   existing Component or Feature, and `kind` is nonempty. `description`,
   `certainty`, and `evidence` are optional; `certainty` is one of `observed`,
@@ -515,6 +520,9 @@ The bounded loop the supervisor enforces is:
    Reconstruction Spec before forming a repair hypothesis. Replace
    `/candidate/plan.json` with a `voxblame.repair-batch/1` that repeats the
    selected coarse target's `{rank, kind, bounds_canonical}` facts.
+   Bind every Planned Edit to one existing semantic Component with
+   `spec_region_id`; use `target_ranks` only for targets whose canonical bounds
+   have strictly positive volume overlap with that Component's canonical bounds.
    Start the next Attempt with an explicit parent step handle; the supervisor reseeds
    `/candidate/work/source/` with the parent's source. Edit it,
    run the registered tools for the child, then `submit_repair`.

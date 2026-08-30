@@ -4386,9 +4386,12 @@ def _validate_repair_plan_boundary(plan: Mapping[str, Any], from_step: int | Non
     edit_keys: set[str] = set()
     mapped_targets: set[str] = set()
     for index, item in enumerate(plan["planned_edits"]):
+        fields = {"edit_key", "target_ranks", "description"}
+        if isinstance(item, Mapping) and "spec_region_id" in item:
+            fields.add("spec_region_id")
         edit = _closed_object(
             item,
-            {"edit_key", "target_ranks", "description"},
+            fields,
             f"$.plan.planned_edits[{index}]",
         )
         _stable_key(edit["edit_key"], f"$.plan.planned_edits[{index}].edit_key")
@@ -4407,6 +4410,11 @@ def _validate_repair_plan_boundary(plan: Mapping[str, Any], from_step: int | Non
         _nonempty_string(
             edit["description"], f"$.plan.planned_edits[{index}].description"
         )
+        if "spec_region_id" in edit:
+            _nonempty_string(
+                edit["spec_region_id"],
+                f"$.plan.planned_edits[{index}].spec_region_id",
+            )
     if mapped_targets != selected_ranks:
         _fail("invalid_attempt", "every selected target must map to a Planned Edit")
     _nonempty_string(plan["rationale"], "$.plan.rationale")

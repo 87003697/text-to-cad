@@ -2086,6 +2086,7 @@ def run_pilot(
                     browser_runtime_capability=sidecar.capability_dir / "runtime.json",
                     candidate_runtime=candidate_runtime,
                     trusted_tools_root=trusted_tools_root,
+                    reconstruction_spec=reconstruction_spec,
                     step_zero_evidence_provider=partial(
                         real_step_zero_evidence_provider,
                         capability_path=sidecar.capability_dir / "runtime.json",
