@@ -74,7 +74,6 @@ except ModuleNotFoundError as _exc:  # pragma: no cover - direct-execution fallb
 MAX_OPERATION_OUTPUT_BYTES = 64 * 1024
 MAX_OPERATION_TIMEOUT_SECONDS = 1800
 MAX_CANDIDATE_FILE_BYTES = 512 * 1024 * 1024
-MAX_ATTEMPT_STEP = 10
 MAX_ATTEMPTS_PER_STEP = 3
 MAX_TOOL_FAILURES_PER_STEP = 2
 MAX_CYCLES = 10
@@ -1449,7 +1448,7 @@ class WorkspaceSupervisor:
             if type(parent_step_handle) is not str:
                 raise SupervisorError("invalid_request")
             resolved = self.registry.resolve(parent_step_handle, "step")
-            if type(resolved) is not int or not 0 <= resolved < MAX_ATTEMPT_STEP:
+            if type(resolved) is not int or not 0 <= resolved < MAX_CYCLES:
                 raise SupervisorError("invalid_handle")
             from_step = resolved
         with self._publication_condition:
@@ -1467,7 +1466,7 @@ class WorkspaceSupervisor:
             if (
                 type(raw_intended_step) is not int
                 or raw_intended_step < 0
-                or raw_intended_step > MAX_ATTEMPT_STEP
+                or raw_intended_step > MAX_CYCLES
             ):
                 raise SupervisorError("workspace_contract_violation")
             intended_step = raw_intended_step
