@@ -2271,18 +2271,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="host the opaque Agent Surface over the candidate-only bridge",
     )
-    reconstruction_spec = run_parser.add_mutually_exclusive_group()
-    reconstruction_spec.add_argument(
+    run_parser.add_argument(
         "--reconstruction-spec",
         action="store_true",
         help="persist the Agent's mutable Reconstruction Spec",
     )
-    reconstruction_spec.add_argument(
-        "--no-reconstruction-spec",
-        dest="reconstruction_spec",
-        action="store_false",
-    )
-    run_parser.set_defaults(reconstruction_spec=False)
     run_parser.add_argument("exp_dir", type=Path)
     run_parser.add_argument("command", nargs=argparse.REMAINDER)
     clean_parser = subparsers.add_parser("clean")
