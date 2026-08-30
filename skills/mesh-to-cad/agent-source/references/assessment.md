@@ -79,6 +79,11 @@ or non-string values fail closed.
      parent decision facts, inspected formal preview, and intended source edit.
 6. Submit through `submit_repair`. The supervisor uses your assessment as
    authored notes only.
+7. If changed source returns
+   `change_from_parent.no_observable_geometry_change=true`, treat the
+   hypothesis as a returned-shape or construction failure first. Repair empty
+   shapes, unintended boolean composition, or discarded transform results
+   before proposing another chord, placement, or curvature change.
 
 ## What assessment is not
 

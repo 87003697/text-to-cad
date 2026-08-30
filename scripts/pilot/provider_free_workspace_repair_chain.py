@@ -12,10 +12,12 @@ import argparse
 import base64
 import binascii
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 from typing import Any, Mapping, Sequence
@@ -31,6 +33,7 @@ EVIDENCE_SCHEMA_V2 = "text-to-cad.provider-free-workspace-repair-chain-evidence/
 EVIDENCE_SCHEMA_V3 = "text-to-cad.provider-free-workspace-repair-chain-evidence/3"
 EVIDENCE_SCHEMA_V4 = "text-to-cad.provider-free-workspace-repair-chain-evidence/4"
 EVIDENCE_SCHEMA_V5 = "text-to-cad.provider-free-workspace-repair-chain-evidence/5"
+EVIDENCE_SCHEMA_V6 = "text-to-cad.provider-free-workspace-repair-chain-evidence/6"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
@@ -98,6 +101,26 @@ def artifact_paths(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Pa
     return exp, exp / "provider-free-evidence.json", exp / "artifact_manifest.json"
 
 
+def authoring_python_from_evidence(repo_root: Path, record: Mapping[str, Any]) -> Path:
+    _, evidence_path, _ = artifact_paths(repo_root, record)
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        identity = evidence["authoring_probe"]["runtime"]["identity"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ProviderFreeError("v6 authoring runtime identity is unavailable") from exc
+    if (
+        not isinstance(identity, str)
+        or not identity
+        or Path(identity).name != identity
+        or identity in {".", ".."}
+    ):
+        raise ProviderFreeError("v6 authoring runtime identity is invalid")
+    python = repo_root / ".cache/mesh-to-cad-agent-runtime" / identity / "bin/python"
+    if not python.is_file():
+        raise ProviderFreeError("v6 authoring observer runtime is unavailable")
+    return python
+
+
 def _json(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
@@ -113,6 +136,221 @@ def _fixture(path: Path) -> None:
 def _source(path: Path, width: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"from build123d import Box\n\ndef gen_step():\n    return Box({width}, 0.5, 0.25)\n", encoding="utf-8")
+
+
+BAD_AUTHORING_SOURCE = """\
+from build123d import Align, Box, Compound, Face, Location, Polygon, extrude
+
+
+def gen_step():
+    body = Box(1.0, 0.2, 0.2, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+    tail = Box(0.3, 0.15, 0.1, align=(Align.CENTER, Align.CENTER, Align.CENTER)).moved(Location((0, 0.55, 0)))
+    empty_plate = extrude(Face(Polygon((-0.4, -0.25), (0.4, -0.25), (0.25, 0.25), (-0.25, 0.25), align=None)), amount=0.04).moved(Location((0, 0, 0.35)))
+    return Compound([body, empty_plate, tail])
+"""
+
+SAFE_AUTHORING_SOURCE = """\
+from build123d import Align, Box, Compound, Location, Polygon, extrude
+from pathlib import Path
+
+
+def _value(name):
+    return float(Path(f"source/{name}.txt").read_text().strip())
+
+
+def gen_step():
+    chord = _value("chord")
+    wing_z = _value("wing-z")
+    body = Box(1.0, 0.2, 0.2, align=(Align.CENTER, Align.CENTER, Align.CENTER))
+    tail = Box(0.3, 0.15, 0.1, align=(Align.CENTER, Align.CENTER, Align.CENTER)).moved(Location((0, 0.55, 0)))
+    wing = extrude(Polygon((-chord / 2, -0.25), (chord / 2, -0.25), (chord / 3, 0.25), (-chord / 3, 0.25), align=None), amount=0.04).moved(Location((0, 0, wing_z)))
+    return Compound([body, wing, tail])
+"""
+
+AUTHORING_STEP_OBSERVER = """\
+import json
+import os
+import sys
+from OCP.Bnd import Bnd_Box
+from OCP.BRepBndLib import BRepBndLib
+from OCP.IFSelect import IFSelect_RetDone
+from OCP.STEPControl import STEPControl_Reader
+from OCP.TopAbs import TopAbs_SOLID
+from OCP.TopExp import TopExp_Explorer
+
+reader = STEPControl_Reader()
+if reader.ReadFile(os.fspath(sys.argv[1])) != IFSelect_RetDone or not reader.TransferRoots():
+    raise SystemExit("unreadable STEP")
+shape = reader.OneShape()
+explorer = TopExp_Explorer(shape, TopAbs_SOLID)
+solid_count = 0
+while explorer.More():
+    solid_count += 1
+    explorer.Next()
+box = Bnd_Box()
+BRepBndLib.Add_s(shape, box)
+xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+print(json.dumps({"solid_count": solid_count, "bounds": {"min": [xmin, ymin, zmin], "max": [xmax, ymax, zmax]}}, separators=(",", ":")))
+"""
+
+
+def _observe_authoring_step(
+    step: Path,
+    *,
+    python: Path,
+    environ: Mapping[str, str],
+) -> dict[str, Any]:
+    completed = subprocess.run(
+        [os.fspath(python), "-c", AUTHORING_STEP_OBSERVER, os.fspath(step)],
+        env=build_runner_env(environ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    try:
+        observation = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ProviderFreeError("authoring probe STEP observation failed") from exc
+    if (
+        completed.returncode != 0
+        or not isinstance(observation, dict)
+        or set(observation) != {"solid_count", "bounds"}
+        or type(observation["solid_count"]) is not int
+        or observation["solid_count"] < 0
+        or not isinstance(observation["bounds"], dict)
+        or set(observation["bounds"]) != {"min", "max"}
+        or any(
+            not isinstance(values, list)
+            or len(values) != 3
+            or any(type(value) not in {int, float} or not math.isfinite(value) for value in values)
+            for values in observation["bounds"].values()
+        )
+    ):
+        raise ProviderFreeError("authoring probe STEP observation is invalid")
+    return observation
+
+
+def _run_authoring_probe(
+    exp_dir: Path,
+    *,
+    runtime: Path,
+    rebuild_entrypoint: Path,
+    environ: Mapping[str, str],
+) -> dict[str, Any]:
+    root = exp_dir / "run/authoring-probe"
+    cases = {
+        "bad_control": (BAD_AUTHORING_SOURCE, {}),
+        "safe_a": (SAFE_AUTHORING_SOURCE, {"chord": "1.2\n", "wing-z": "0.35\n"}),
+        "safe_b": (SAFE_AUTHORING_SOURCE, {"chord": "1.6\n", "wing-z": "0.5\n"}),
+    }
+    records: dict[str, Any] = {}
+    for name, (source, inputs) in cases.items():
+        case_root = root / name
+        source_root = case_root / "source"
+        source_root.mkdir(parents=True)
+        (source_root / "model.py").write_text(source, encoding="utf-8")
+        argv = [
+            str(runtime / "bin/python"),
+            str(rebuild_entrypoint),
+            "build",
+            "--source",
+            "source/model.py",
+            "--output-dir",
+            "output",
+        ]
+        for input_name, value in inputs.items():
+            (source_root / f"{input_name}.txt").write_text(value, encoding="utf-8")
+            argv.extend(("--input", f"source/{input_name}.txt"))
+        completed = subprocess.run(
+            argv,
+            cwd=case_root,
+            env=build_runner_env(environ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+        if completed.returncode != 0:
+            raise ProviderFreeError(f"authoring probe build failed: {name}")
+        record = {
+            "source": (source_root / "model.py").relative_to(exp_dir).as_posix(),
+            "inputs": {
+                input_name: (source_root / f"{input_name}.txt").relative_to(exp_dir).as_posix()
+                for input_name in inputs
+            },
+            "step": (case_root / "output/canonical.step").relative_to(exp_dir).as_posix(),
+            "build": (case_root / "output/build.json").relative_to(exp_dir).as_posix(),
+        }
+        record["observed"] = _read_authoring_artifacts(
+            exp_dir,
+            record,
+            observer_python=runtime / "bin/python",
+            environ=environ,
+        )
+        records[name] = record
+    return {
+        "schema": "text-to-cad.candidate-authoring-probe/1",
+        "runtime": {"kind": "candidate-runtime", "identity": runtime.name},
+        "cases": records,
+    }
+
+
+def _read_authoring_artifacts(
+    exp_dir: Path,
+    record: Mapping[str, Any],
+    *,
+    observer_python: Path,
+    environ: Mapping[str, str],
+) -> dict[str, Any]:
+    step = exp_dir / str(record["step"])
+    build_path = exp_dir / str(record["build"])
+    geometry = _observe_authoring_step(
+        step,
+        python=observer_python,
+        environ=environ,
+    )
+    try:
+        build = json.loads(build_path.read_text(encoding="utf-8"))
+        direct = build["dependencies"]["direct"]
+        build123d_version = next(
+            item["version"] for item in direct if item.get("name") == "build123d"
+        )
+        adapter = build["adapter"]
+        recipe_path = build["recipe"]["path"]
+        if recipe_path != "rebuild.json":
+            raise ProviderFreeError("authoring probe recipe path is invalid")
+        recipe = json.loads((build_path.parent / recipe_path).read_text(encoding="utf-8"))
+        build_inputs = [
+            {key: item[key] for key in ("id", "role", "path")}
+            for item in build["files"]
+            if item.get("role") in {"canonical-cad-source", "declared-source-input"}
+        ]
+        recipe_inputs = [
+            {key: item[key] for key in ("id", "role", "path")}
+            for item in recipe["inputs"]
+        ]
+    except (OSError, json.JSONDecodeError, KeyError, StopIteration, TypeError) as exc:
+        raise ProviderFreeError("authoring probe build manifest is invalid") from exc
+    return {
+        **geometry,
+        "build_version": {
+            "adapter_id": adapter.get("id"),
+            "adapter_version": adapter.get("version"),
+            "build123d": build123d_version,
+        },
+        "recipe_binding": {
+            "schema": recipe.get("schema"),
+            "executable": recipe.get("executable"),
+            "entrypoint": recipe.get("entrypoint"),
+            "build_inputs": build_inputs,
+            "recipe_inputs": recipe_inputs,
+            "argv_template": recipe.get("argvTemplate"),
+            "placeholders": recipe.get("placeholders"),
+        },
+    }
 
 
 def _spec(path: Path, region_id: str, bounds: Mapping[str, Any]) -> bytes:
@@ -691,7 +929,12 @@ def _validate_v2_artifacts(
 
 
 def _validate_v5_artifacts(
-    repo_root: Path, record: Mapping[str, Any]
+    repo_root: Path,
+    record: Mapping[str, Any],
+    *,
+    schema: str = EVIDENCE_SCHEMA_V5,
+    authoring_python: Path | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> tuple[Path, Path]:
     exp_dir, evidence_path, artifact_manifest_path = artifact_paths(repo_root, record)
     try:
@@ -707,17 +950,19 @@ def _validate_v5_artifacts(
         "module_paths", "runtime", "final", "spec_persistence",
         "spec_region_binding", "directional_projection",
     }
+    if schema == EVIDENCE_SCHEMA_V6:
+        required.add("authoring_probe")
     if (
         not isinstance(evidence, dict)
         or set(evidence) != required
-        or evidence.get("schema") != EVIDENCE_SCHEMA_V5
+        or evidence.get("schema") != schema
         or evidence.get("identity") != expected_identity(record)
         or evidence.get("scenario") != SCENARIO
         or evidence.get("gate_passed") is not True
     ):
         raise ProviderFreeError("invalid v5 evidence shape")
     expected_manifest = {
-        "schema": "text-to-cad.provider-free-artifact-manifest/5",
+        "schema": f"text-to-cad.provider-free-artifact-manifest/{6 if schema == EVIDENCE_SCHEMA_V6 else 5}",
         "final_status": 0,
         "identity": expected_identity(record),
         "evidence": {"path": evidence_path.name},
@@ -915,10 +1160,160 @@ def _validate_v5_artifacts(
     binding = evidence["spec_region_binding"]
     if not isinstance(binding, dict) or set(binding) != {"region_id", "cycles", "negative_cases", "authority_absent"} or binding.get("region_id") != "component.primary" or binding.get("cycles") != 2 or binding.get("authority_absent") is not True or [item.get("case") for item in binding.get("negative_cases", [])] != ["unknown_id", "zero_overlap"] or any(item.get("error") != "supervisor_failure" or item.get("attempt_created") is not False or item.get("public_no_leak") is not True for item in binding["negative_cases"]):
         raise ProviderFreeError("invalid v5 Spec Region binding")
+    if schema == EVIDENCE_SCHEMA_V6:
+        if authoring_python is None or environ is None:
+            raise ProviderFreeError("v6 authoring observer runtime is unavailable")
+        _validate_authoring_probe(
+            exp_dir,
+            evidence["authoring_probe"],
+            observer_python=authoring_python,
+            environ=environ,
+        )
     return evidence_path, artifact_manifest_path
 
 
-def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Path]:
+def _validate_authoring_probe(
+    exp_dir: Path,
+    probe: Any,
+    *,
+    observer_python: Path,
+    environ: Mapping[str, str],
+) -> None:
+    if (
+        not isinstance(probe, dict)
+        or set(probe) != {"schema", "runtime", "cases"}
+        or probe.get("schema") != "text-to-cad.candidate-authoring-probe/1"
+        or not isinstance(probe.get("runtime"), dict)
+        or set(probe["runtime"]) != {"kind", "identity"}
+        or probe["runtime"].get("kind") != "candidate-runtime"
+        or not isinstance(probe["runtime"].get("identity"), str)
+        or not probe["runtime"]["identity"]
+        or not isinstance(probe.get("cases"), dict)
+        or set(probe["cases"]) != {"bad_control", "safe_a", "safe_b"}
+    ):
+        raise ProviderFreeError("invalid v6 authoring probe shape")
+    cases = probe["cases"]
+    expected_inputs = {
+        "bad_control": {},
+        "safe_a": {"chord": b"1.2\n", "wing-z": b"0.35\n"},
+        "safe_b": {"chord": b"1.6\n", "wing-z": b"0.5\n"},
+    }
+    def expected_recipe_binding(input_names: Sequence[str]) -> dict[str, Any]:
+        recipe_inputs = [
+            {"id": "source", "role": "canonical-cad-source", "path": "source/model.py"}
+        ]
+        build_inputs = [
+            {"id": "input:source", "role": "canonical-cad-source", "path": "source/model.py"}
+        ]
+        argv_template = [
+            "build", "--source", "{source}", "--output-dir", "{outputDirectory}"
+        ]
+        placeholders: dict[str, Any] = {
+            "source": {"kind": "input", "inputId": "source"},
+            "outputDirectory": {"kind": "output-directory"},
+            "manifest": {"kind": "manifest", "path": "build.json"},
+        }
+        for index, input_name in enumerate(input_names, start=1):
+            input_id = f"input-{index}"
+            input_path = f"source/{input_name}.txt"
+            recipe_inputs.append(
+                {"id": input_id, "role": "declared-source-input", "path": input_path}
+            )
+            build_inputs.append(
+                {"id": f"input:{input_id}", "role": "declared-source-input", "path": input_path}
+            )
+            argv_template.extend(("--input", f"{{input:{input_id}}}"))
+            placeholders[f"input:{input_id}"] = {"kind": "input", "inputId": input_id}
+        return {
+            "schema": "mesh-to-cad.rebuild-recipe/1",
+            "executable": "cad.canonical-build/1",
+            "entrypoint": "scripts/canonical-build",
+            "build_inputs": build_inputs,
+            "recipe_inputs": recipe_inputs,
+            "argv_template": argv_template,
+            "placeholders": placeholders,
+        }
+
+    observed: dict[str, dict[str, Any]] = {}
+    for name, record in cases.items():
+        if not isinstance(record, dict) or set(record) != {"source", "inputs", "step", "build", "observed"}:
+            raise ProviderFreeError("invalid v6 authoring probe case")
+        expected_source = BAD_AUTHORING_SOURCE if name == "bad_control" else SAFE_AUTHORING_SOURCE
+        prefix = f"run/authoring-probe/{name}"
+        if (
+            record["source"] != f"{prefix}/source/model.py"
+            or record["step"] != f"{prefix}/output/canonical.step"
+            or record["build"] != f"{prefix}/output/build.json"
+        ):
+            raise ProviderFreeError("v6 authoring artifact path mismatch")
+        source = exp_dir / str(record["source"])
+        inputs = record["inputs"]
+        if source.read_text(encoding="utf-8") != expected_source or not isinstance(inputs, dict) or set(inputs) != set(expected_inputs[name]):
+            raise ProviderFreeError("v6 authoring source authority mismatch")
+        for input_name, expected_bytes in expected_inputs[name].items():
+            if inputs[input_name] != f"{prefix}/source/{input_name}.txt":
+                raise ProviderFreeError("v6 authoring input path mismatch")
+            if (exp_dir / str(inputs[input_name])).read_bytes() != expected_bytes:
+                raise ProviderFreeError("v6 authoring input authority mismatch")
+        derived = _read_authoring_artifacts(
+            exp_dir,
+            record,
+            observer_python=observer_python,
+            environ=environ,
+        )
+        reported = record["observed"]
+        if (
+            not isinstance(reported, dict)
+            or set(reported) != set(derived)
+            or reported.get("solid_count") != derived["solid_count"]
+            or reported.get("build_version") != derived["build_version"]
+            or reported.get("recipe_binding") != derived["recipe_binding"]
+            or not isinstance(reported.get("bounds"), dict)
+            or set(reported["bounds"]) != {"min", "max"}
+            or any(
+                not isinstance(reported["bounds"].get(side), list)
+                or len(reported["bounds"][side]) != 3
+                or any(
+                    type(actual) not in {int, float}
+                    or not math.isclose(
+                        actual, expected, rel_tol=0.0, abs_tol=1e-12
+                    )
+                    for actual, expected in zip(
+                        reported["bounds"][side], derived["bounds"][side]
+                    )
+                )
+                for side in ("min", "max")
+            )
+        ):
+            raise ProviderFreeError("v6 authoring observation was not artifact-derived")
+        if derived["recipe_binding"] != expected_recipe_binding(tuple(expected_inputs[name])):
+            raise ProviderFreeError("v6 authoring recipe input binding mismatch")
+        observed[name] = derived
+    if observed["bad_control"]["solid_count"] != 2 or any(
+        observed[name]["solid_count"] != 3 for name in ("safe_a", "safe_b")
+    ):
+        raise ProviderFreeError("v6 authoring solid discriminator failed")
+    if observed["safe_a"]["bounds"] == observed["safe_b"]["bounds"]:
+        raise ProviderFreeError("v6 safe authoring edit was not observable")
+    versions = {json.dumps(item["build_version"], sort_keys=True) for item in observed.values()}
+    version = observed["safe_a"]["build_version"]
+    if (
+        len(versions) != 1
+        or version.get("adapter_id") != "cad.canonical-build/1"
+        or version.get("adapter_version") != 1
+        or not isinstance(version.get("build123d"), str)
+        or not version["build123d"]
+    ):
+        raise ProviderFreeError("v6 authoring build version mismatch")
+
+
+def validate_artifacts(
+    repo_root: Path,
+    record: Mapping[str, Any],
+    *,
+    authoring_python: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[Path, Path]:
     _, evidence_path, _ = artifact_paths(repo_root, record)
     try:
         schema = json.loads(evidence_path.read_text(encoding="utf-8")).get("schema")
@@ -934,6 +1329,14 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
         return _validate_v2_artifacts(repo_root, record, schema=EVIDENCE_SCHEMA_V4)
     if schema == EVIDENCE_SCHEMA_V5:
         return _validate_v5_artifacts(repo_root, record)
+    if schema == EVIDENCE_SCHEMA_V6:
+        return _validate_v5_artifacts(
+            repo_root,
+            record,
+            schema=EVIDENCE_SCHEMA_V6,
+            authoring_python=authoring_python,
+            environ=environ,
+        )
     raise ProviderFreeError("unknown evidence schema")
 
 
@@ -1107,8 +1510,14 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             repair_ordinal=a_ordinal,
             meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src",
         )
-        evidence = {"schema": EVIDENCE_SCHEMA_V5, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence, "spec_region_binding": spec_region_binding, "directional_projection": directional_projection}
-        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/5", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record); return 0
+        authoring_probe = _run_authoring_probe(
+            exp_dir,
+            runtime=candidate_lease.runtime,
+            rebuild_entrypoint=published_rebuild,
+            environ=environ,
+        )
+        evidence = {"schema": EVIDENCE_SCHEMA_V6, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence, "spec_region_binding": spec_region_binding, "directional_projection": directional_projection, "authoring_probe": authoring_probe}
+        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/6", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record, authoring_python=authoring_python_from_evidence(repo_root, record), environ=environ); return 0
     finally:
         for resource, action in ((bridge, "stop"), (supervisor, "close"), (candidate_lease, "release"), (sidecar, "stop")):
             if resource is None: continue

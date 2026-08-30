@@ -364,6 +364,40 @@ evidence, previews, manifests, and export artifacts.
   `source-changes.json`; trusted operations produce measured evidence and
   export artifacts.
 
+## Candidate geometry guardrails
+
+Use build123d constructions whose returned shape preserves every intended
+solid:
+
+- Extrude a polygon plate directly:
+  `extrude(Polygon(*points, align=None), amount=thickness)`. Wrapping that
+  polygon as `Face(Polygon(...))` produces an empty face in the installed
+  runtime; if an operation specifically needs a face, select the polygon's
+  existing `.faces()[0]`.
+- Keep independently named body, wing, and tail solids with
+  `Compound([body, wing, tail])`. Use a boolean only when the hypothesis
+  requires a watertight fused solid; `+` is a boolean composition operator,
+  not an assembly container.
+- For nonuniform scaling, keep the primitive and scale operation private,
+  then return or explicitly collect the transformed value:
+
+  ```python
+  from build123d import Compound, Location, Mode, Sphere, scale
+
+  body = scale(
+      Sphere(1.0, mode=Mode.PRIVATE),
+      by=(sx, sy, sz),
+      mode=Mode.PRIVATE,
+  ).moved(Location((x, y, z)))
+  result = Compound([body, wing, tail])
+  ```
+
+When changed source returns
+`change_from_parent.no_observable_geometry_change=true`, first treat it as a
+returned-shape or construction failure. Check for empty shapes, unintended
+boolean composition, and discarded transform results before changing chord,
+height, curvature, or another geometric parameter without evidence.
+
 ## Reconstruction reasoning
 
 You never see raw reference bytes. Instead you request one bounded
@@ -499,8 +533,8 @@ Rules for using decision facts:
   Equal depth and error count is a tie. Use missing and excess counts for
   diagnosis, not for additional ranking.
 - If `change_from_parent.no_observable_geometry_change` is true after
-  a repair, your source edit did not move observable geometry — stop
-  and reconsider before spending another attempt.
+  changed source, diagnose the returned shape and construction first as
+  specified above before spending another attempt.
 - If `acceptance_state` is `acceptance_satisfied`, do not start
   another repair; proceed to `select_and_finalize`.
 - The decision-facts response is capped alongside the rest of the

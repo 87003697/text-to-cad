@@ -69,6 +69,23 @@ outside `source/`, or touch `candidate.glb`. Doing so causes
 
 Use these build123d transform idioms:
 
+- **Polygon plates:** extrude the polygon's existing face directly. In the
+  installed runtime, wrapping the polygon in another `Face` creates an empty
+  shape:
+
+  ```python
+  from build123d import Polygon, extrude
+
+  wing = extrude(Polygon(*points, align=None), amount=thickness)
+  ```
+
+  If another operation specifically requires a face, use
+  `Polygon(*points, align=None).faces()[0]`.
+- **Independent solids:** preserve named body, wing, and tail solids with
+  `Compound([body, wing, tail])`. Use a boolean only when the intended result
+  must be one watertight fused solid; `+` performs boolean composition rather
+  than collecting an assembly.
+
 - **BuildPart 3D placement:** use plural `with Locations((x, y, z)):`. A
   `Location` or `Plane` value is not a context manager. If a workplane is
   needed, pass it to a supported builder constructor such as
@@ -101,6 +118,13 @@ already-added builder geometry to mutate. If a candidate operation fails,
 change the candidate source first, then reuse the same active Attempt's opaque
 operation handle while its command budget permits; never repeat unchanged
 source.
+
+If changed source later measures
+`change_from_parent.no_observable_geometry_change=true`, inspect the returned
+shape construction first: empty shapes, boolean composition that discarded
+components, and discarded transform results are the primary diagnosis. Change
+chord, placement, or curvature only after the construction returns the intended
+solids.
 
 ## Repair edits
 

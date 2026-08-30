@@ -191,7 +191,12 @@ def is_valid_provider_free_success(source: Path, manifest: object) -> bool:
         elif record["scenario"] == mcp_differential.SCENARIO:
             mcp_differential.validate_artifacts(repo_root, record)
         elif record["scenario"] == repair_chain.SCENARIO:
-            repair_chain.validate_artifacts(repo_root, record)
+            repair_chain.validate_artifacts(
+                repo_root,
+                record,
+                authoring_python=repo_root / ".venv/bin/python",
+                environ=os.environ,
+            )
         else:
             installed_plugin.validate_artifacts(
                 repo_root,

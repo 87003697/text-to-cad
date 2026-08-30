@@ -716,9 +716,19 @@ def supervise_provider_free_installed_plugin(
                 interval=interval,
                 env=provider_free.build_runner_env(os.environ),
             )
-            evidence_path, manifest_path = provider_free.validate_artifacts(
-                REPO_ROOT, record
-            )
+            if record.get("scenario") == "workspace-repair-chain":
+                evidence_path, manifest_path = provider_free.validate_artifacts(
+                    REPO_ROOT,
+                    record,
+                    authoring_python=provider_free.authoring_python_from_evidence(
+                        REPO_ROOT, record
+                    ),
+                    environ=os.environ,
+                )
+            else:
+                evidence_path, manifest_path = provider_free.validate_artifacts(
+                    REPO_ROOT, record
+                )
             updates = {
                 "runner_final_status": 0,
                 "artifact_manifest": _relative(manifest_path),
