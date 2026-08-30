@@ -47,8 +47,8 @@ Step 0 has `compare_to: null`. Every nonzero step has an explicit earlier
 
 Fixed values are `coordinate_contract: trellis2_canonical/1`,
 `semantic_units: null`, `max_depth: 8`, and `boundary_epsilon: 1e-9`. Profile
-values are `conservative_surface_occupancy/1`,
-`repair_target_partition/1`, and `signed_exterior_surface/1`. Paths are
+values for newly measured workspaces are `conservative_surface_occupancy/1`,
+`repair_target_partition/3`, and `signed_exterior_surface/1`. Paths are
 normalized experiment-relative POSIX paths. Identities are lowercase SHA-256
 digests.
 
@@ -98,13 +98,22 @@ groups split deterministically without changing their combined exact coverage.
 Every Measured Step recomputes the Active Repair Depth; final acceptance still
 uses depth-8 evidence. Exterior evidence remains independent and may form an
 exterior-only Repair Frontier.
+
+`repair_target_partition/3` computes reference and candidate occupancy at the
+Active Repair Depth before publication. It publishes one raw interior target
+for each cell in reference-minus-candidate or candidate-minus-reference and
+publishes nothing for cells occupied by both. Each target has exactly one
+missing/excess direction in `error_profile`; its depth-8 mask stays within that
+single Active-Depth cell and contains support from only that direction.
+Interior target totals therefore equal the Active-Depth error count. Ordering
+is by coarse cell and direction, followed by exterior targets.
 The Agent-facing CLI is intentionally thinner than this persisted report. It
 returns only `repair_frontier.active_depth`, exterior `alerts`, and paged
 interior targets containing bounds, missing/excess counts, and stable target
 and mask identities. Interior items use deterministic attention order by
 objective error impact. A legacy `/1` workspace remains readable but reports
-`active_depth: null`; only a newly measured `/2` workspace has an adaptive
-Repair Frontier.
+`active_depth: null`; newly measured `/3` workspaces use the directional
+Active-Depth frontier. `/2` remains readable as historical authority.
 Target masks are exact minimal octree covers. `error_profile` carries the
 missing/excess direction facts without introducing a prescriptive direction,
 priority, strategy, verdict, or `next_action` field.

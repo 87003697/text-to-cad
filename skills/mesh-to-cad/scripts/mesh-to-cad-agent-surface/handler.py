@@ -15,7 +15,7 @@ from typing import Any, Callable, Protocol
 
 
 REQUEST_SCHEMA = "mesh-to-cad.agent-intent/1"
-RESPONSE_SCHEMA = "mesh-to-cad.agent-response/1"
+RESPONSE_SCHEMA = "mesh-to-cad.agent-response/2"
 ERROR_SCHEMA = "mesh-to-cad.agent-error/1"
 
 MAX_REQUEST_BYTES = 64 * 1024
@@ -252,7 +252,7 @@ def _next_result(value: Any, path: str) -> list[str]:
     return list(value)
 
 
-DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/1"
+DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/2"
 _DECISION_FACT_MAX_TARGETS = 8
 _ACCEPTANCE_STATE_VALUES = ("acceptance_satisfied", "unaccepted")
 
@@ -335,7 +335,9 @@ def _repair_target_items(
             {
                 "rank": _integer(item["rank"], f"{path}[{index}].rank"),
                 "kind": _enum(
-                    item["kind"], ("interior", "exterior"), f"{path}[{index}].kind"
+                    item["kind"],
+                    ("missing", "excess", "exterior"),
+                    f"{path}[{index}].kind",
                 ),
                 "bounds_canonical": _bounds_canonical_result(
                     item["bounds_canonical"], f"{path}[{index}].bounds_canonical"

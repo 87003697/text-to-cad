@@ -261,6 +261,7 @@ def validate_session_contract(value: Mapping[str, Any]) -> Mapping[str, Any]:
     if profiles["target_partition"] not in {
         "repair_target_partition/1",
         "repair_target_partition/2",
+        "repair_target_partition/3",
     }:
         _fail(
             "$.profiles.target_partition",
@@ -414,6 +415,14 @@ def _validate_measurement_document(root: Mapping[str, Any], *, report: bool) -> 
             root["repair_targets"],
             step,
             interior_error_count=depth_8["surface_error_count"],
+            active_error_count=next(
+                (
+                    entry["surface_error_count"]
+                    for entry in depths
+                    if entry["surface_error_count"]
+                ),
+                0,
+            ),
             exterior_error_count=exterior["surface_cell_count"],
         )
     else:
@@ -553,10 +562,18 @@ def _validate_report_targets(
     step: int,
     *,
     interior_error_count: int,
+    active_error_count: int,
     exterior_error_count: int,
 ) -> None:
     targets = _object(value, "$.repair_targets", _REPORT_TARGETS_FIELDS)
-    _string(targets["ordering_profile"], "$.repair_targets.ordering_profile")
+    ordering_profile = _string(
+        targets["ordering_profile"], "$.repair_targets.ordering_profile"
+    )
+    if ordering_profile not in {
+        "repair_target_display/1",
+        "repair_target_display/2",
+    }:
+        _fail("$.repair_targets.ordering_profile", "is unsupported")
     total = _integer(targets["total"], "$.repair_targets.total", minimum=0)
     ordered = _array(targets["ordered_targets"], "$.repair_targets.ordered_targets")
     if len(ordered) != total:
@@ -590,10 +607,15 @@ def _validate_report_targets(
             observed_interior += target["error_profile"]["surface_error_count"]
         else:
             observed_exterior += target["error_profile"]["surface_error_count"]
-    if observed_interior != interior_error_count:
+    expected_interior = (
+        active_error_count
+        if ordering_profile == "repair_target_display/2"
+        else interior_error_count
+    )
+    if observed_interior != expected_interior:
         _fail(
             "$.repair_targets.ordered_targets",
-            "interior targets do not cover the depth-8 error count",
+            "interior targets do not cover the profile error count",
         )
     if observed_exterior != exterior_error_count:
         _fail(

@@ -30,6 +30,7 @@ EVIDENCE_SCHEMA_V1 = "text-to-cad.provider-free-workspace-repair-chain-evidence/
 EVIDENCE_SCHEMA_V2 = "text-to-cad.provider-free-workspace-repair-chain-evidence/2"
 EVIDENCE_SCHEMA_V3 = "text-to-cad.provider-free-workspace-repair-chain-evidence/3"
 EVIDENCE_SCHEMA_V4 = "text-to-cad.provider-free-workspace-repair-chain-evidence/4"
+EVIDENCE_SCHEMA_V5 = "text-to-cad.provider-free-workspace-repair-chain-evidence/5"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
@@ -192,7 +193,7 @@ def _inspect(socket_path: Path, handle: str, expected: bytes) -> dict[str, Any]:
         raise ProviderFreeError("MCP preview text is invalid") from exc
     if parsed_text != structured:
         raise ProviderFreeError("MCP preview text does not match structured content")
-    if not isinstance(structured, dict) or set(structured) != {"schema", "intent", "result"} or structured.get("schema") != "mesh-to-cad.agent-response/1" or structured.get("intent") != "inspect_formal_preview" or not isinstance(structured.get("result"), dict) or set(structured["result"]) != {"state", "preview_handle", "permitted_next_intents"} or structured["result"].get("state") != "available" or structured["result"].get("preview_handle") != handle or not isinstance(structured["result"].get("permitted_next_intents"), list) or any(type(item) is not str or item not in MCP_PERMITTED_INTENTS for item in structured["result"]["permitted_next_intents"]):
+    if not isinstance(structured, dict) or set(structured) != {"schema", "intent", "result"} or structured.get("schema") != "mesh-to-cad.agent-response/2" or structured.get("intent") != "inspect_formal_preview" or not isinstance(structured.get("result"), dict) or set(structured["result"]) != {"state", "preview_handle", "permitted_next_intents"} or structured["result"].get("state") != "available" or structured["result"].get("preview_handle") != handle or not isinstance(structured["result"].get("permitted_next_intents"), list) or any(type(item) is not str or item not in MCP_PERMITTED_INTENTS for item in structured["result"]["permitted_next_intents"]):
         raise ProviderFreeError("MCP preview envelope is invalid")
     return {"initialize_id": initialized.get("id"), "tools_list_id": listed.get("id"), "call_id": result.get("id"), "tools": 1, "content_types": [item.get("type") for item in content], "image_bytes": len(expected), "text_present": True, "handle_bound": True}
 
@@ -203,6 +204,203 @@ def _public(value: Any) -> str:
     if any(item in text for item in forbidden):
         raise ProviderFreeError("public response leaked forbidden detail")
     return text
+
+
+def _expand_mask_prefixes(path: Path, active_depth: int) -> tuple[set[int], set[int]]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProviderFreeError("directional mask is unavailable") from exc
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"schema", "max_depth", "regions"}
+        or document.get("schema") != "octree_region_set/1"
+        or document.get("max_depth") != 8
+        or not isinstance(document.get("regions"), list)
+    ):
+        raise ProviderFreeError("directional mask schema is invalid")
+    depth8: set[int] = set()
+    coarse: set[int] = set()
+    for region in document["regions"]:
+        if not isinstance(region, dict) or set(region) != {"depth", "prefix"}:
+            raise ProviderFreeError("directional mask region is invalid")
+        depth = region["depth"]
+        prefix = region["prefix"]
+        if type(depth) is not int or type(prefix) is not int or not 0 <= depth <= 8:
+            raise ProviderFreeError("directional mask region identity is invalid")
+        remaining = 3 * (8 - depth)
+        cells = range(prefix << remaining, (prefix + 1) << remaining)
+        depth8.update(cells)
+        if depth >= active_depth:
+            coarse.add(prefix >> (3 * (depth - active_depth)))
+        else:
+            shift = 3 * (active_depth - depth)
+            coarse.update(range(prefix << shift, (prefix + 1) << shift))
+    return depth8, coarse
+
+
+def _coarse_bounds(prefix: int, depth: int) -> dict[str, list[float]]:
+    coordinates = [0, 0, 0]
+    for shift in range(depth - 1, -1, -1):
+        child = (prefix >> (3 * shift)) & 7
+        coordinates[0] = (coordinates[0] << 1) | ((child >> 2) & 1)
+        coordinates[1] = (coordinates[1] << 1) | ((child >> 1) & 1)
+        coordinates[2] = (coordinates[2] << 1) | (child & 1)
+    resolution = 1 << depth
+    return {
+        "min": [-0.5 + value / resolution for value in coordinates],
+        "max": [-0.5 + (value + 1) / resolution for value in coordinates],
+    }
+
+
+def _directional_projection_evidence(
+    exp_dir: Path,
+    *,
+    facts: Mapping[str, Any],
+    repair_ordinal: int,
+    meshscope_src: Path,
+) -> dict[str, Any]:
+    active_depth = facts["residual_summary"]["repair_frontier"]["active_depth"]
+    measurement_root = exp_dir / "voxblame" / "steps/000000"
+    measurement = json.loads(
+        (measurement_root / "measurement.json").read_text(encoding="utf-8")
+    )
+    session = json.loads(
+        (exp_dir / "voxblame" / "session.json").read_text(encoding="utf-8")
+    )
+    if session.get("profiles", {}).get("target_partition") != "repair_target_partition/3":
+        raise ProviderFreeError("directional partition profile was not published")
+    targets = measurement.get("repair_targets", {})
+    ordered = targets.get("ordered_targets")
+    if targets.get("ordering_profile") != "repair_target_display/2" or not isinstance(ordered, list):
+        raise ProviderFreeError("directional target order is invalid")
+    interior = [item for item in ordered if item.get("kind") == "interior"]
+    active_metric = measurement["errors_by_depth"][active_depth - 1]
+    profile_total = sum(item["error_profile"]["surface_error_count"] for item in interior)
+    if profile_total != active_metric["surface_error_count"] or len(interior) != profile_total:
+        raise ProviderFreeError("directional target totals do not match Active Depth")
+
+    if os.fspath(meshscope_src) not in sys.path:
+        sys.path.insert(0, os.fspath(meshscope_src))
+    from meshscope.voxblame.codec import read_surface_tree
+
+    missing = {
+        int(code)
+        for code in read_surface_tree(measurement_root / "missing-depth8.vbsvo").iter_leaf_codes()
+    }
+    excess = {
+        int(code)
+        for code in read_surface_tree(measurement_root / "excess-depth8.vbsvo").iter_leaf_codes()
+    }
+    reference = {
+        int(code)
+        for code in read_surface_tree(exp_dir / "voxblame/reference.vbsvo").iter_leaf_codes()
+    }
+    candidate = {
+        int(code)
+        for code in read_surface_tree(measurement_root / "candidate.vbsvo").iter_leaf_codes()
+    }
+    shift = 3 * (8 - active_depth)
+    canceled = {code >> shift for code in missing} & {code >> shift for code in excess}
+    if not canceled:
+        raise ProviderFreeError("fixture did not prove canceled legacy prefixes")
+    expected = sorted(
+        [*( (prefix, "missing") for prefix in {code >> shift for code in reference} - {code >> shift for code in candidate} ),
+         *( (prefix, "excess") for prefix in {code >> shift for code in candidate} - {code >> shift for code in reference} )],
+        key=lambda item: (item[0], 0 if item[1] == "missing" else 1),
+    )
+    observed: list[tuple[int, str]] = []
+    for target in interior:
+        profile = target["error_profile"]
+        direction = "missing" if profile["missing_surface_count"] else "excess"
+        support = missing if direction == "missing" else excess
+        opposite = excess if direction == "missing" else missing
+        mask_cells, coarse_cells = _expand_mask_prefixes(
+            exp_dir / Path(target["mask"]["path"]), active_depth
+        )
+        if len(coarse_cells) != 1:
+            raise ProviderFreeError("directional target mask crosses Active-Depth cells")
+        prefix = next(iter(coarse_cells))
+        if (
+            mask_cells != {code for code in support if code >> shift == prefix}
+            or mask_cells & opposite
+            or target["bounds_canonical"] != _coarse_bounds(prefix, active_depth)
+        ):
+            raise ProviderFreeError("directional target mask or bounds is invalid")
+        observed.append((prefix, direction))
+    if observed != expected or any(
+        item.get("kind") == "interior"
+        for item in ordered[len(interior):]
+    ):
+        raise ProviderFreeError("directional target coverage or order is invalid")
+
+    public_targets = facts.get("repair_targets")
+    public_items = public_targets.get("items") if isinstance(public_targets, dict) else None
+    if (
+        facts.get("schema") != "mesh-to-cad.decision-facts/2"
+        or not isinstance(public_items, list)
+        or not public_items
+        or any(item.get("kind") not in {"missing", "excess", "exterior"} for item in public_items)
+        or any(set(item) != {"rank", "kind", "bounds_canonical"} for item in public_items)
+    ):
+        raise ProviderFreeError("Agent projection is not closed and directional")
+    selected = public_items[0]
+    private_matches = [item for item in ordered if item.get("display_rank") == selected["rank"]]
+    if len(private_matches) != 1:
+        raise ProviderFreeError("public target does not map to one private identity")
+    private = private_matches[0]
+    expected_kind = "missing" if private["error_profile"]["missing_surface_count"] else "excess"
+    if selected["kind"] != expected_kind or selected["bounds_canonical"] != private["bounds_canonical"]:
+        raise ProviderFreeError("public target direction conflicts with private authority")
+    mask_path = exp_dir / Path(private["mask"]["path"])
+    mask_cells, coarse_cells = _expand_mask_prefixes(mask_path, active_depth)
+    opposite = excess if expected_kind == "missing" else missing
+    if len(coarse_cells) != 1 or mask_cells & opposite:
+        raise ProviderFreeError("directional target mask crosses cell or direction")
+    diff = json.loads(
+        (exp_dir / f"cycles/{repair_ordinal:06d}/diff.json").read_text(encoding="utf-8")
+    )
+    resolved = diff.get("repair_batch", {}).get("selected_targets")
+    if (
+        not isinstance(resolved, list)
+        or len(resolved) != 1
+        or set(resolved[0]) != {"target_key", "kind", "mask_sha256"}
+        or resolved[0].get("target_key") != private["target_key"]
+        or resolved[0].get("kind") != "interior"
+        or resolved[0].get("mask_sha256") != private["mask"]["logical_sha256"]
+    ):
+        raise ProviderFreeError("Region Diff did not bind one directional identity")
+    return {
+        "schema": "text-to-cad.directional-active-depth-evidence/1",
+        "partition_profile": "repair_target_partition/3",
+        "ordering_profile": "repair_target_display/2",
+        "active_depth": active_depth,
+        "exact_metric": {
+            "missing": active_metric["missing_surface_count"],
+            "excess": active_metric["excess_surface_count"],
+            "total": active_metric["surface_error_count"],
+            "published_interior_total": profile_total,
+        },
+        "canceled_legacy_prefixes": len(canceled),
+        "public": {
+            "schema": facts["schema"],
+            "returned": len(public_items),
+            "total": public_targets["total"],
+            "kinds": sorted({item["kind"] for item in public_items}),
+            "closed_fields": True,
+            "items": public_items,
+        },
+        "selected": {
+            "rank": selected["rank"],
+            "kind": selected["kind"],
+            "bounds_canonical": selected["bounds_canonical"],
+            "private_kind": private["kind"],
+            "private_identity_count": 1,
+            "mask_active_cell_count": len(coarse_cells),
+            "mask_opposite_support_count": len(mask_cells & opposite),
+            "region_diff_identity_count": len(resolved),
+        },
+    }
 
 
 def _validate_v1_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Path]:
@@ -492,6 +690,234 @@ def _validate_v2_artifacts(
     return evidence_path, artifact_manifest_path
 
 
+def _validate_v5_artifacts(
+    repo_root: Path, record: Mapping[str, Any]
+) -> tuple[Path, Path]:
+    exp_dir, evidence_path, artifact_manifest_path = artifact_paths(repo_root, record)
+    try:
+        if evidence_path.stat().st_size > MAX_EVIDENCE_BYTES or artifact_manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
+            raise ProviderFreeError("v5 artifact too large")
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProviderFreeError("v5 evidence missing or invalid") from exc
+    required = {
+        "schema", "identity", "scenario", "gate_passed", "selection", "steps",
+        "graph", "cycles", "previews", "mcp", "workspace_validation",
+        "module_paths", "runtime", "final", "spec_persistence",
+        "spec_region_binding", "directional_projection",
+    }
+    if (
+        not isinstance(evidence, dict)
+        or set(evidence) != required
+        or evidence.get("schema") != EVIDENCE_SCHEMA_V5
+        or evidence.get("identity") != expected_identity(record)
+        or evidence.get("scenario") != SCENARIO
+        or evidence.get("gate_passed") is not True
+    ):
+        raise ProviderFreeError("invalid v5 evidence shape")
+    expected_manifest = {
+        "schema": "text-to-cad.provider-free-artifact-manifest/5",
+        "final_status": 0,
+        "identity": expected_identity(record),
+        "evidence": {"path": evidence_path.name},
+    }
+    if manifest != expected_manifest:
+        raise ProviderFreeError("invalid v5 manifest")
+
+    directional = evidence["directional_projection"]
+    if not isinstance(directional, dict) or set(directional) != {
+        "schema", "partition_profile", "ordering_profile", "active_depth",
+        "exact_metric", "canceled_legacy_prefixes", "public", "selected",
+    }:
+        raise ProviderFreeError("invalid directional evidence shape")
+    metric = directional["exact_metric"]
+    public = directional["public"]
+    selected = directional["selected"]
+    if (
+        directional.get("schema") != "text-to-cad.directional-active-depth-evidence/1"
+        or directional.get("partition_profile") != "repair_target_partition/3"
+        or directional.get("ordering_profile") != "repair_target_display/2"
+        or type(directional.get("active_depth")) is not int
+        or directional["active_depth"] <= 0
+        or type(directional.get("canceled_legacy_prefixes")) is not int
+        or directional["canceled_legacy_prefixes"] <= 0
+        or not isinstance(metric, dict)
+        or set(metric) != {"missing", "excess", "total", "published_interior_total"}
+        or any(type(metric[key]) is not int or metric[key] < 0 for key in metric)
+        or metric["total"] != metric["missing"] + metric["excess"]
+        or metric["published_interior_total"] != metric["total"]
+        or not isinstance(public, dict)
+        or set(public) != {"schema", "returned", "total", "kinds", "closed_fields", "items"}
+        or public.get("schema") != "mesh-to-cad.decision-facts/2"
+        or public.get("closed_fields") is not True
+        or type(public.get("returned")) is not int
+        or type(public.get("total")) is not int
+        or public["total"] != metric["total"]
+        or public["returned"] != min(public["total"], 8)
+        or not isinstance(public.get("kinds"), list)
+        or not public["kinds"]
+        or any(kind not in {"missing", "excess", "exterior"} for kind in public["kinds"])
+        or not isinstance(public.get("items"), list)
+        or any(not isinstance(item, dict) or set(item) != {"rank", "kind", "bounds_canonical"} for item in public["items"])
+        or not isinstance(selected, dict)
+        or set(selected) != {"rank", "kind", "bounds_canonical", "private_kind", "private_identity_count", "mask_active_cell_count", "mask_opposite_support_count", "region_diff_identity_count"}
+        or selected.get("rank") != 0
+        or selected.get("kind") not in {"missing", "excess"}
+        or selected.get("private_kind") != "interior"
+        or selected.get("private_identity_count") != 1
+        or selected.get("mask_active_cell_count") != 1
+        or selected.get("mask_opposite_support_count") != 0
+        or selected.get("region_diff_identity_count") != 1
+    ):
+        raise ProviderFreeError("invalid directional evidence")
+
+    steps = evidence["steps"]
+    cycles = evidence["cycles"]
+    selection = evidence["selection"]
+    if not isinstance(steps, dict) or set(steps) != {"step_zero", "repair_a", "repair_b"} or not isinstance(cycles, dict) or set(cycles) != {"repair_a", "repair_b"}:
+        raise ProviderFreeError("invalid v5 repair chain")
+    for name in ("step_zero", "repair_a", "repair_b"):
+        item = steps[name]
+        if not isinstance(item, dict) or set(item) != {"step_handle", "ordinal", "parent", "cycle", "accepted", "frontier", "target_count", "manifest"} or item.get("accepted") is not False or item.get("manifest") != f"steps/{item.get('ordinal'):06d}/step.json":
+            raise ProviderFreeError("invalid v5 step record")
+        document = json.loads((exp_dir / item["manifest"]).read_text(encoding="utf-8"))
+        if document.get("step") != item["ordinal"] or document.get("parent_step") != item["parent"]:
+            raise ProviderFreeError("v5 step authority mismatch")
+    if steps["repair_a"]["parent"] != steps["step_zero"]["ordinal"] or steps["repair_b"]["parent"] != steps["repair_a"]["ordinal"]:
+        raise ProviderFreeError("v5 parent chain mismatch")
+    if not isinstance(selection, dict) or selection.get("selected") not in {"step_zero", "repair_a"} or selection.get("selected_step") != steps[selection["selected"]]["ordinal"] or selection.get("repair_b_is_head") != steps["repair_b"]["ordinal"]:
+        raise ProviderFreeError("v5 historical selection mismatch")
+    if evidence.get("graph") != {"source": "step_parentage", "heads": [steps["repair_b"]["ordinal"]]}:
+        raise ProviderFreeError("v5 graph mismatch")
+    for name in ("repair_a", "repair_b"):
+        cycle = cycles[name]
+        if not isinstance(cycle, dict) or set(cycle) != {"ordinal", "from_step", "to_step", "selected_parent_target", "artifacts"} or cycle.get("to_step") != steps[name]["ordinal"] or cycle.get("from_step") != steps[name]["parent"]:
+            raise ProviderFreeError("invalid v5 cycle record")
+        target = cycle["selected_parent_target"]
+        if not isinstance(target, dict) or set(target) != {"rank", "kind", "bounds_canonical"} or target.get("kind") not in {"missing", "excess", "exterior"}:
+            raise ProviderFreeError("invalid v5 cycle target")
+        artifacts = cycle["artifacts"]
+        expected = {key: f"cycles/{cycle['to_step']:06d}/{key}.json" for key in ("plan", "assessment", "diff", "cycle", "attempt")}
+        if artifacts != expected or any(not (exp_dir / relative).is_file() for relative in artifacts.values()):
+            raise ProviderFreeError("v5 cycle artifacts are incomplete")
+        plan = json.loads((exp_dir / artifacts["plan"]).read_text(encoding="utf-8"))
+        diff = json.loads((exp_dir / artifacts["diff"]).read_text(encoding="utf-8"))
+        attempt = json.loads((exp_dir / artifacts["attempt"]).read_text(encoding="utf-8"))
+        if target not in plan.get("selected_targets", []) or plan.get("from_step") != cycle["from_step"] or diff.get("repair_batch", {}).get("plan_sha256") != attempt.get("plan_digest"):
+            raise ProviderFreeError("v5 cycle binding mismatch")
+
+    step0 = steps["step_zero"]["ordinal"]
+    measurement_root = exp_dir / "voxblame" / "steps" / f"{step0:06d}"
+    try:
+        session = json.loads((exp_dir / "voxblame/session.json").read_text(encoding="utf-8"))
+        measurement = json.loads((measurement_root / "measurement.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProviderFreeError("v5 directional authority is unavailable") from exc
+    if session.get("profiles", {}).get("target_partition") != "repair_target_partition/3" or measurement.get("repair_targets", {}).get("ordering_profile") != "repair_target_display/2":
+        raise ProviderFreeError("v5 directional authority profile mismatch")
+    active_depth = directional["active_depth"]
+    errors = measurement.get("errors_by_depth")
+    if not isinstance(errors, list) or len(errors) != 8 or active_depth != next((item.get("depth") for item in errors if item.get("surface_error_count")), None):
+        raise ProviderFreeError("v5 Active Depth authority mismatch")
+    active_metric = errors[active_depth - 1]
+    if metric != {"missing": active_metric["missing_surface_count"], "excess": active_metric["excess_surface_count"], "total": active_metric["surface_error_count"], "published_interior_total": active_metric["surface_error_count"]}:
+        raise ProviderFreeError("v5 exact metric was not authority-derived")
+    meshscope_src = repo_root / "packages/meshscope/src"
+    if os.fspath(meshscope_src) not in sys.path:
+        sys.path.insert(0, os.fspath(meshscope_src))
+    from meshscope.voxblame.codec import read_surface_tree
+
+    reference = {int(code) for code in read_surface_tree(exp_dir / "voxblame/reference.vbsvo").iter_leaf_codes()}
+    candidate = {int(code) for code in read_surface_tree(measurement_root / "candidate.vbsvo").iter_leaf_codes()}
+    missing = {int(code) for code in read_surface_tree(measurement_root / "missing-depth8.vbsvo").iter_leaf_codes()}
+    excess = {int(code) for code in read_surface_tree(measurement_root / "excess-depth8.vbsvo").iter_leaf_codes()}
+    shift = 3 * (8 - active_depth)
+    reference_prefixes = {code >> shift for code in reference}
+    candidate_prefixes = {code >> shift for code in candidate}
+    expected = sorted(
+        [*((prefix, "missing") for prefix in reference_prefixes - candidate_prefixes), *((prefix, "excess") for prefix in candidate_prefixes - reference_prefixes)],
+        key=lambda item: (item[0], 0 if item[1] == "missing" else 1),
+    )
+    canceled = {code >> shift for code in missing} & {code >> shift for code in excess}
+    if len(canceled) != directional["canceled_legacy_prefixes"]:
+        raise ProviderFreeError("v5 canceled-prefix evidence mismatch")
+    ordered = measurement["repair_targets"].get("ordered_targets")
+    if not isinstance(ordered, list):
+        raise ProviderFreeError("v5 target authority is malformed")
+    interior = [item for item in ordered if item.get("kind") == "interior"]
+    observed: list[tuple[int, str]] = []
+    projected: list[dict[str, Any]] = []
+    for rank, target in enumerate(interior):
+        profile = target.get("error_profile")
+        if profile == {"missing_surface_count": 1, "excess_surface_count": 0, "surface_error_count": 1}:
+            direction, support, opposite = "missing", missing, excess
+        elif profile == {"missing_surface_count": 0, "excess_surface_count": 1, "surface_error_count": 1}:
+            direction, support, opposite = "excess", excess, missing
+        else:
+            raise ProviderFreeError("v5 target direction is malformed")
+        relative = PurePosixPath(target.get("mask", {}).get("path", ""))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ProviderFreeError("v5 target mask path is invalid")
+        mask_cells, coarse_cells = _expand_mask_prefixes(exp_dir / Path(relative), active_depth)
+        if len(coarse_cells) != 1:
+            raise ProviderFreeError("v5 target mask crosses Active-Depth cells")
+        prefix = next(iter(coarse_cells))
+        if mask_cells != {code for code in support if code >> shift == prefix} or mask_cells & opposite or target.get("bounds_canonical") != _coarse_bounds(prefix, active_depth) or target.get("display_rank") != rank:
+            raise ProviderFreeError("v5 target support, bounds, or rank is invalid")
+        observed.append((prefix, direction))
+        projected.append({"rank": rank, "kind": direction, "bounds_canonical": target["bounds_canonical"]})
+    if observed != expected or any(item.get("kind") == "interior" for item in ordered[len(interior):]):
+        raise ProviderFreeError("v5 target coverage or ordering is invalid")
+    for rank, target in enumerate(ordered[len(interior):], start=len(interior)):
+        if target.get("kind") != "exterior" or target.get("display_rank") != rank:
+            raise ProviderFreeError("v5 exterior target order is invalid")
+        projected.append({"rank": rank, "kind": "exterior", "bounds_canonical": target["bounds_canonical"]})
+    if public["items"] != projected[:8] or public["total"] != len(projected) or public["returned"] != len(projected[:8]) or public["kinds"] != sorted({item["kind"] for item in projected[:8]}):
+        raise ProviderFreeError("v5 public projection is not authority-derived")
+    if selected["rank"] != 0 or selected["kind"] != projected[0]["kind"] or selected["bounds_canonical"] != projected[0]["bounds_canonical"]:
+        raise ProviderFreeError("v5 selected public tuple mismatch")
+    raw = ordered[0]
+    diff = json.loads((exp_dir / cycles["repair_a"]["artifacts"]["diff"]).read_text(encoding="utf-8"))
+    resolved = diff.get("repair_batch", {}).get("selected_targets")
+    if not isinstance(resolved, list) or len(resolved) != 1 or resolved[0] != {"target_key": raw["target_key"], "kind": "interior", "mask_sha256": raw["mask"]["logical_sha256"]}:
+        raise ProviderFreeError("v5 Region Diff identity is not authority-bound")
+
+    previews = evidence["previews"]
+    mcp = evidence["mcp"]
+    if not isinstance(previews, dict) or set(previews) != {"step_zero", "repair_a", "repair_b", "selected_reinspect"} or not isinstance(mcp, dict) or set(mcp) != set(previews):
+        raise ProviderFreeError("invalid v5 preview evidence")
+    for name, item in previews.items():
+        if not isinstance(item, dict) or set(item) != {"path", "bytes"} or not (exp_dir / item["path"]).is_file() or (exp_dir / item["path"]).stat().st_size != item["bytes"] or mcp[name].get("image_bytes") != item["bytes"]:
+            raise ProviderFreeError("v5 preview authority mismatch")
+    if previews["selected_reinspect"] != previews[selection["selected"]]:
+        raise ProviderFreeError("v5 selected preview mismatch")
+
+    final = evidence["final"]
+    if not isinstance(final, dict) or set(final) != {"manifest", "selected_step", "source", "measurement", "preview", "verification", "identity_bound"} or final.get("selected_step") != selection["selected_step"] or final.get("identity_bound") is not True:
+        raise ProviderFreeError("invalid v5 final binding")
+    for relative in ("final/manifest.json", "final/source/source/model.py", "final/measurement.json", "final/preview.json", "final/verification.json"):
+        if not (exp_dir / relative).is_file():
+            raise ProviderFreeError("v5 final artifact missing")
+    if (exp_dir / "final/source/source/model.py").read_bytes() != (exp_dir / f"steps/{selection['selected_step']:06d}/candidate/source/model.py").read_bytes() or (exp_dir / "final/measurement.json").read_bytes() != (exp_dir / f"steps/{selection['selected_step']:06d}/measurement.json").read_bytes():
+        raise ProviderFreeError("v5 final bytes are not selected-step bound")
+    if evidence.get("workspace_validation") is not True:
+        raise ProviderFreeError("v5 workspace validation missing")
+    modules = evidence["module_paths"]
+    if not isinstance(modules, dict) or set(modules) != {"product_root", "workspace", "core", "handler", "mcp", "rebuild", "geometry"} or modules.get("product_root") != "skills" or any(not isinstance(modules.get(key), str) or not modules[key].startswith("skills/") for key in ("workspace", "core", "handler", "mcp", "rebuild", "geometry")):
+        raise ProviderFreeError("invalid v5 module provenance")
+    runtime = evidence["runtime"]
+    if not isinstance(runtime, dict) or runtime.get("interpreter") != ".venv/bin/python" or runtime.get("registry") != {"schema": "mesh-to-cad.tool-registry/2", "rebuild_id": "cad.canonical-build/1", "geometry_id": "mesh-compare.voxblame/1", "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}:
+        raise ProviderFreeError("invalid v5 runtime provenance")
+    spec = evidence["spec_persistence"]
+    if not isinstance(spec, dict) or set(spec) != {"seam", "path", "enabled_status", "updated_bytes", "disabled_absent", "workspace_authority_absent", "missing_status", "prior_failure_status"} or spec.get("seam") != "runner.persist_agent_reconstruction_spec" or spec.get("path") != runner.RECONSTRUCTION_SPEC_RELATIVE.as_posix() or spec.get("enabled_status") != 0 or type(spec.get("updated_bytes")) is not int or spec["updated_bytes"] <= 0 or spec.get("disabled_absent") is not True or spec.get("workspace_authority_absent") is not True or spec.get("missing_status") != 1 or spec.get("prior_failure_status") != 17 or not (exp_dir / runner.RECONSTRUCTION_SPEC_RELATIVE).is_file() or (exp_dir / runner.RECONSTRUCTION_SPEC_RELATIVE).stat().st_size != spec["updated_bytes"]:
+        raise ProviderFreeError("invalid v5 Spec persistence")
+    binding = evidence["spec_region_binding"]
+    if not isinstance(binding, dict) or set(binding) != {"region_id", "cycles", "negative_cases", "authority_absent"} or binding.get("region_id") != "component.primary" or binding.get("cycles") != 2 or binding.get("authority_absent") is not True or [item.get("case") for item in binding.get("negative_cases", [])] != ["unknown_id", "zero_overlap"] or any(item.get("error") != "supervisor_failure" or item.get("attempt_created") is not False or item.get("public_no_leak") is not True for item in binding["negative_cases"]):
+        raise ProviderFreeError("invalid v5 Spec Region binding")
+    return evidence_path, artifact_manifest_path
+
+
 def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Path]:
     _, evidence_path, _ = artifact_paths(repo_root, record)
     try:
@@ -506,6 +932,8 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
         return _validate_v2_artifacts(repo_root, record, schema=EVIDENCE_SCHEMA_V3)
     if schema == EVIDENCE_SCHEMA_V4:
         return _validate_v2_artifacts(repo_root, record, schema=EVIDENCE_SCHEMA_V4)
+    if schema == EVIDENCE_SCHEMA_V5:
+        return _validate_v5_artifacts(repo_root, record)
     raise ProviderFreeError("unknown evidence schema")
 
 
@@ -673,8 +1101,14 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         )
         spec_persistence = {"seam": "runner.persist_agent_reconstruction_spec", "path": runner.RECONSTRUCTION_SPEC_RELATIVE.as_posix(), "enabled_status": enabled_status, "updated_bytes": len((exp_dir / runner.RECONSTRUCTION_SPEC_RELATIVE).read_bytes()), "disabled_absent": not (disabled_exp / runner.RECONSTRUCTION_SPEC_RELATIVE).exists(), "workspace_authority_absent": workspace_authority_absent, "missing_status": missing_status, "prior_failure_status": prior_failure_status}
         spec_region_binding = {"region_id": "component.primary", "cycles": 2, "negative_cases": negative_cases, "authority_absent": workspace_authority_absent}
-        evidence = {"schema": EVIDENCE_SCHEMA_V4, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence, "spec_region_binding": spec_region_binding}
-        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/4", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record); return 0
+        directional_projection = _directional_projection_evidence(
+            exp_dir,
+            facts=facts,
+            repair_ordinal=a_ordinal,
+            meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src",
+        )
+        evidence = {"schema": EVIDENCE_SCHEMA_V5, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence, "spec_region_binding": spec_region_binding, "directional_projection": directional_projection}
+        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/5", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record); return 0
     finally:
         for resource, action in ((bridge, "stop"), (supervisor, "close"), (candidate_lease, "release"), (sidecar, "stop")):
             if resource is None: continue

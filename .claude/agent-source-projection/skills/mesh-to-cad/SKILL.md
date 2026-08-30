@@ -142,7 +142,7 @@ Every successful client response is one JSON object with the response envelope:
 {
   "ok": true,
   "response": {
-    "schema": "mesh-to-cad.agent-response/1",
+    "schema": "mesh-to-cad.agent-response/2",
     "intent": "<same intent>",
     "result": { "...": "..." }
   }
@@ -287,7 +287,7 @@ evidence, previews, manifests, and export artifacts.
     "schema": "voxblame.repair-batch/1",
     "from_step": 0,
     "selected_targets": [
-      {"rank": 0, "kind": "interior", "bounds_canonical": {"min": [-0.5, -0.5, -0.5], "max": [0.0, 0.0, 0.0]}}
+      {"rank": 0, "kind": "missing", "bounds_canonical": {"min": [-0.5, -0.5, -0.5], "max": [0.0, 0.0, 0.0]}}
     ],
     "planned_edits": [
       {
@@ -417,7 +417,7 @@ carries one closed **decision facts** object under the
 
 ```json
 {
-  "schema": "mesh-to-cad.decision-facts/1",
+  "schema": "mesh-to-cad.decision-facts/2",
   "step_ordinal": 1,
   "parent_step_ordinal": 0,
   "accepted": false,
@@ -438,7 +438,7 @@ carries one closed **decision facts** object under the
     "items": [
       {
         "rank": 0,
-        "kind": "interior",
+        "kind": "missing",
         "bounds_canonical": {
           "min": [-0.5, -0.2, -0.1],
           "max": [0.4, 0.3, 0.2]
@@ -466,16 +466,20 @@ Fields and bounds:
   the interior is clear. When it is `null`, all remaining frontier scalars
   are zero; exterior errors remain only in their `repair_targets` entries.
   Otherwise the remaining bounded scalars describe that interior layer.
-  Use it with `repair_targets`, whose interior targets are grouped at this
-  active depth.
+  Use it with `repair_targets`, whose directional interior targets are
+  individual net-error cells at this active depth.
 - `repair_targets` — `null` when acceptance is satisfied, otherwise a
-  page of up to eight items that includes active-depth interior targets
+  page of up to eight items that includes active-depth directional targets
   and may also include independent actionable exterior targets. Exterior
   targets are not part of the interior Repair Frontier. Each item
   carries only rank, semantic kind, and active-depth-cell
   `bounds_canonical`. Bounds are closed
   three-axis canonical `min`/`max` coordinates with finite values and
   `min <= max` on each axis; they apply to interior and exterior targets.
+  `missing` means add geometry in the bounded cell, `excess` means remove or
+  shrink geometry there, and `exterior` means recover geometry outside the
+  canonical frame. Repeat the returned `kind` unchanged in every selected
+  target; do not reinterpret its direction.
 - `change_from_parent` — repair-only; reports whether the
   Measured Step observably changed vs. its parent and whether the
   parent was itself accepted.

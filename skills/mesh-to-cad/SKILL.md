@@ -160,8 +160,10 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-step-zero \
 For the chosen parent Measured Step:
 
 1. Read the Repair Frontier's Active Repair Depth and exterior alerts, then
-   page every current interior Repair Target in attention order. Inspect its
-   bounds, objective missing/excess evidence, and formal preview. Do not choose
+   page every current directional Repair Target in attention order. `missing`
+   requires adding geometry, `excess` requires removing or shrinking geometry,
+   and `exterior` requires recovering geometry outside the canonical frame.
+   Inspect its bounds, objective missing/excess evidence, and formal preview. Do not choose
    or advance repair depth manually.
 2. If Reconstruction Spec is enabled, reread
    `<EXP_DIR>/run/reconstruction-spec.json` immediately before forming each

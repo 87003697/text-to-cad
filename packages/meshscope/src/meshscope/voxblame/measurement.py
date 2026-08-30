@@ -130,6 +130,8 @@ def measure_step(
     repair_targets = partition_repair_targets(
         missing_tree,
         excess_tree,
+        reference_tree=reference_tree,
+        candidate_tree=candidate_tree,
         active_depth=active_depth,
         source_step=step,
         step_root=step_root,
@@ -474,12 +476,18 @@ def _validate_measurement_slice(
     targets = measurement["repair_targets"]
     if summary["repair_targets"] != repair_target_page(targets):
         raise OctreeError("measurement Repair Target page mismatch")
+    active_depth = active_repair_depth(measurement["errors_by_depth"])
+    expected_interior = (
+        measurement["errors_by_depth"][active_depth - 1]["surface_error_count"]
+        if _TARGET_PROFILE == TARGET_PARTITION_PROFILE and active_depth is not None
+        else depth_eight["surface_error_count"]
+    )
     if sum(
         target["error_profile"]["surface_error_count"]
         for target in targets["ordered_targets"]
         if target["kind"] == "interior"
-    ) != depth_eight["surface_error_count"]:
-        raise OctreeError("Repair Targets do not cover depth-8 error evidence")
+    ) != expected_interior:
+        raise OctreeError("Repair Targets do not cover profile error evidence")
     if sum(
         target["error_profile"]["surface_error_count"]
         for target in targets["ordered_targets"]

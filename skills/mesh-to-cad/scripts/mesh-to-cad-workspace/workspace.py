@@ -1209,7 +1209,8 @@ def seed_repair_source_from_parent_step(
         raise
 
 
-DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/1"
+DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/2"
+_DIRECTIONAL_TARGET_PARTITION_PROFILE = "repair_target_partition/3"
 _MAX_DECISION_FACT_TARGETS = 8
 _MAX_DEPTH = 8
 _MAX_FORMAL_PREVIEW_PNG_BYTES = 16 * 1024 * 1024
@@ -1268,62 +1269,40 @@ def _fact_bounds_canonical(value: Any, detail: str) -> dict[str, list[int | floa
     return bounds
 
 
-def _active_depth_cells(workspace: Path, item: Mapping[str, Any], depth: int) -> tuple[tuple[int, int, int], ...]:
-    """Project one host-only canonical region mask to its occupied coarse cells."""
-
-    mask = item.get("mask")
-    if not isinstance(mask, Mapping) or type(mask.get("path")) is not str:
-        _decision_facts_fail("decision-facts repair target mask is malformed")
-    relative = PurePosixPath(mask["path"])
-    if relative.is_absolute() or ".." in relative.parts:
-        _decision_facts_fail("decision-facts repair target mask path is malformed")
-    try:
-        snapshot = json.loads((workspace / Path(relative)).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        _decision_facts_fail("decision-facts repair target mask is unavailable")
+def _require_directional_target_profile(workspace: Path) -> None:
+    session = _read_authority_json(
+        workspace,
+        workspace / "voxblame" / "session.json",
+        "$.voxblame.session",
+    )
+    profiles = session.get("profiles")
     if (
-        not isinstance(snapshot, Mapping)
-        or set(snapshot) != {"schema", "max_depth", "regions"}
-        or snapshot["schema"] != "octree_region_set/1"
-        or snapshot["max_depth"] != _MAX_DEPTH
-        or not isinstance(snapshot["regions"], list)
+        not isinstance(profiles, Mapping)
+        or profiles.get("target_partition")
+        != _DIRECTIONAL_TARGET_PARTITION_PROFILE
     ):
-        _decision_facts_fail("decision-facts repair target mask is malformed")
-    prefixes: set[int] = set()
-    for region in snapshot["regions"]:
-        if not isinstance(region, Mapping) or set(region) != {"depth", "prefix"}:
-            _decision_facts_fail("decision-facts repair target mask region is malformed")
-        region_depth, prefix = region["depth"], region["prefix"]
-        if (
-            type(region_depth) is not int or isinstance(region_depth, bool)
-            or type(prefix) is not int or isinstance(prefix, bool)
-            or not 0 <= region_depth <= _MAX_DEPTH
-            or not 0 <= prefix < 1 << (3 * region_depth)
-        ):
-            _decision_facts_fail("decision-facts repair target mask region is malformed")
-        if region_depth >= depth:
-            prefixes.add(prefix >> (3 * (region_depth - depth)))
-        else:
-            shift = 3 * (depth - region_depth)
-            prefixes.update(range(prefix << shift, (prefix + 1) << shift))
-    cells = []
-    for prefix in sorted(prefixes):
-        coordinates = [0, 0, 0]
-        for shift in range(depth - 1, -1, -1):
-            child = (prefix >> (3 * shift)) & 7
-            coordinates[0] = (coordinates[0] << 1) | ((child >> 2) & 1)
-            coordinates[1] = (coordinates[1] << 1) | ((child >> 1) & 1)
-            coordinates[2] = (coordinates[2] << 1) | (child & 1)
-        cells.append(tuple(coordinates))
-    return tuple(cells)
+        _decision_facts_fail("active Workspace target profile is unsupported")
 
 
-def _active_depth_bounds(cell: tuple[int, int, int], depth: int) -> dict[str, list[float]]:
-    width = 1.0 / (2 ** depth)
-    return {
-        "min": [round(-0.5 + index * width, 6) for index in cell],
-        "max": [round(-0.5 + (index + 1) * width, 6) for index in cell],
-    }
+def _directional_public_kind(item: Mapping[str, Any]) -> str:
+    if item.get("kind") == "exterior":
+        return "exterior"
+    if item.get("kind") != "interior":
+        _decision_facts_fail("decision-facts repair target kind is malformed")
+    profile = item.get("error_profile")
+    if profile == {
+        "missing_surface_count": 1,
+        "excess_surface_count": 0,
+        "surface_error_count": 1,
+    }:
+        return "missing"
+    if profile == {
+        "missing_surface_count": 0,
+        "excess_surface_count": 1,
+        "surface_error_count": 1,
+    }:
+        return "excess"
+    _decision_facts_fail("directional repair target profile is malformed")
 
 
 def _resolve_repair_provider_plan(
@@ -1336,55 +1315,27 @@ def _resolve_repair_provider_plan(
         workspace / "voxblame" / "steps" / f"{from_step:06d}" / "measurement.json",
         "$.voxblame.parent.measurement",
     )
-    active_depth = _project_residual_summary(measurement)["repair_frontier"][
-        "active_depth"
-    ]
+    _require_directional_target_profile(workspace)
     ordered_targets = measurement["repair_targets"]["ordered_targets"]
-    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    public_targets: list[dict[str, Any]] = []
     for target in ordered_targets:
-        if target["kind"] == "exterior":
-            key = ("exterior", target["target_key"])
-            groups[key] = {
+        public_targets.append(
+            {
                 "rank": target["display_rank"],
-                "kind": "exterior",
+                "kind": _directional_public_kind(target),
                 "bounds_canonical": target["bounds_canonical"],
-                "targets": [target],
+                "target": target,
             }
-            continue
-        if active_depth is None:
-            _decision_facts_fail("interior repair target has no active depth")
-        for cell in _active_depth_cells(workspace, target, active_depth):
-            key = ("interior", *cell)
-            group = groups.get(key)
-            if group is None:
-                groups[key] = group = {
-                    "rank": target["display_rank"],
-                    "kind": "interior",
-                    "bounds_canonical": _active_depth_bounds(cell, active_depth),
-                    "targets": [],
-                }
-            group["rank"] = min(group["rank"], target["display_rank"])
-            group["targets"].append(target)
-
-    ordered_groups = sorted(
-        groups.values(),
-        key=lambda item: (
-            item["rank"],
-            item["kind"],
-            item["bounds_canonical"]["min"],
-        ),
-    )
-    for rank, group in enumerate(ordered_groups):
-        group["rank"] = rank
+        )
 
     selected_groups: dict[int, dict[str, Any]] = {}
     for item in plan["selected_targets"]:
         matches = [
-            group
-            for group in ordered_groups
-            if group["rank"] == item["rank"]
-            and group["kind"] == item["kind"]
-            and group["bounds_canonical"] == item["bounds_canonical"]
+            target
+            for target in public_targets
+            if target["rank"] == item["rank"]
+            and target["kind"] == item["kind"]
+            and target["bounds_canonical"] == item["bounds_canonical"]
         ]
         if len(matches) != 1:
             _decision_facts_fail("repair target does not match active-depth authority")
@@ -1394,27 +1345,27 @@ def _resolve_repair_provider_plan(
     selected_targets: list[dict[str, str]] = []
     selected_keys: set[str] = set()
     for item in plan["selected_targets"]:
-        for target in selected_groups[item["rank"]]["targets"]:
-            key = target["target_key"]
-            if key not in selected_keys:
-                selected_keys.add(key)
-                selected_targets.append(
-                    {
-                        "target_key": key,
-                        "mask_sha256": target["mask"]["logical_sha256"],
-                    }
-                )
+        target = selected_groups[item["rank"]]["target"]
+        key = target["target_key"]
+        if key not in selected_keys:
+            selected_keys.add(key)
+            selected_targets.append(
+                {
+                    "target_key": key,
+                    "mask_sha256": target["mask"]["logical_sha256"],
+                }
+            )
     resolved["selected_targets"] = selected_targets
     resolved_edits: list[dict[str, Any]] = []
     for edit in plan["planned_edits"]:
         edit_targets: list[str] = []
         edit_keys: set[str] = set()
         for rank in edit["target_ranks"]:
-            for target in selected_groups[rank]["targets"]:
-                key = target["target_key"]
-                if key not in edit_keys:
-                    edit_keys.add(key)
-                    edit_targets.append(key)
+            target = selected_groups[rank]["target"]
+            key = target["target_key"]
+            if key not in edit_keys:
+                edit_keys.add(key)
+                edit_targets.append(key)
         resolved_edits.append(
             {
                 "edit_key": edit["edit_key"],
@@ -1427,6 +1378,7 @@ def _resolve_repair_provider_plan(
 
 
 def _project_repair_targets(workspace: Path, value: Any, *, active_depth: int | None) -> Any:
+    _require_directional_target_profile(workspace)
     if not isinstance(value, Mapping):
         _decision_facts_fail("decision-facts repair targets are malformed")
     total = _fact_int(value.get("total"), "decision-facts repair target total is malformed")
@@ -1435,45 +1387,24 @@ def _project_repair_targets(workspace: Path, value: Any, *, active_depth: int | 
         _decision_facts_fail("decision-facts repair target authority is malformed")
     if total == 0:
         return None
-    grouped: dict[tuple[int, int, int], dict[str, Any]] = {}
-    exterior: list[dict[str, Any]] = []
+    projected: list[dict[str, Any]] = []
     for item in items:
         if not isinstance(item, Mapping):
             _decision_facts_fail("decision-facts repair target item is malformed")
         display_rank = item.get("display_rank")
         rank = _fact_int(display_rank, "decision-facts repair target rank is malformed")
-        kind = item.get("kind")
-        if kind not in ("interior", "exterior"):
-            _decision_facts_fail("decision-facts repair target kind is malformed")
         bounds = _fact_bounds_canonical(item.get("bounds_canonical"), "decision-facts repair target bounds are malformed")
-        if kind == "exterior":
-            exterior.append({"rank": rank, "kind": kind, "bounds_canonical": bounds})
-            continue
-        if active_depth is None:
+        kind = _directional_public_kind(item)
+        if kind != "exterior" and active_depth is None:
             _decision_facts_fail("interior repair target has no active depth")
-        for cell in _active_depth_cells(workspace, item, active_depth):
-            current = grouped.get(cell)
-            if current is None or rank < current["rank"]:
-                grouped[cell] = {
-                    "rank": rank,
-                    "kind": "interior",
-                    "bounds_canonical": _active_depth_bounds(cell, active_depth),
-                }
-    ordered = sorted(
-        [*grouped.values(), *exterior],
-        key=lambda item: (
-            item.get("rank", total),
-            item["kind"],
-            item["bounds_canonical"]["min"],
-        ),
-    )
-    for rank, item in enumerate(ordered):
-        item["rank"] = rank
-    projected_items = ordered[:_MAX_DECISION_FACT_TARGETS]
+        projected.append({"rank": rank, "kind": kind, "bounds_canonical": bounds})
+    if [item["rank"] for item in projected] != list(range(total)):
+        _decision_facts_fail("decision-facts repair target order is malformed")
+    projected_items = projected[:_MAX_DECISION_FACT_TARGETS]
     return {
-        "total": len(ordered),
+        "total": len(projected),
         "returned": len(projected_items),
-        "remaining": len(ordered) - len(projected_items),
+        "remaining": len(projected) - len(projected_items),
         "items": projected_items,
     }
 

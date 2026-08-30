@@ -4377,7 +4377,7 @@ def _validate_repair_plan_boundary(plan: Mapping[str, Any], from_step: int | Non
         rank = target["rank"]
         if not isinstance(rank, int) or isinstance(rank, bool) or rank < 0:
             _fail("invalid_attempt", "Repair Batch target ranks must be non-negative integers")
-        if target["kind"] not in {"interior", "exterior"}:
+        if target["kind"] not in {"missing", "excess", "exterior"}:
             _fail("invalid_attempt", "Repair Batch target kind is invalid")
         _validate_bounds(target["bounds_canonical"], f"$.plan.selected_targets[{index}].bounds_canonical")
         if rank in selected_ranks:

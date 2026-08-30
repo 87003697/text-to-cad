@@ -28,8 +28,10 @@ if TYPE_CHECKING:
 
 
 LEGACY_TARGET_PARTITION_PROFILE = "repair_target_partition/1"
-TARGET_PARTITION_PROFILE = "repair_target_partition/2"
-TARGET_ORDERING_PROFILE = "repair_target_display/1"
+ADAPTIVE_TARGET_PARTITION_PROFILE = "repair_target_partition/2"
+TARGET_PARTITION_PROFILE = "repair_target_partition/3"
+LEGACY_TARGET_ORDERING_PROFILE = "repair_target_display/1"
+TARGET_ORDERING_PROFILE = "repair_target_display/2"
 INTERIOR_REGION_SET_SCHEMA = "octree_region_set/1"
 EXTERIOR_GRID_REGION_SET_SCHEMA = "exterior_grid_region_set/1"
 TARGET_PAGE_SIZE = 8
@@ -59,30 +61,27 @@ class _RepairTargetPartition:
 
 
 @dataclass(frozen=True)
-class _InteriorTarget:
-    cells: frozenset[int]
-    missing_count: int
-    excess_count: int
+class _DirectionalTarget:
+    direction: str
+    coarse_prefix: int
     bounds: dict[str, list[float]]
     mask: dict[str, Any]
     mask_bytes: bytes
     component_key: str
-    split_index: int
-    split_count: int
-    split_reason: str
-    frontier_coverage: int
 
 
 def partition_repair_targets(
     missing_tree: SurfaceTree,
     excess_tree: SurfaceTree,
     *,
+    reference_tree: SurfaceTree,
+    candidate_tree: SurfaceTree,
     active_depth: int | None,
     source_step: int,
     step_root: str | None = None,
     exterior: ExteriorMeasurement | None = None,
 ) -> _RepairTargetPartition:
-    """Group exact depth-8 errors at the deterministic active repair depth."""
+    """Publish one directional target per net-error cell at the active depth."""
 
     if (
         not isinstance(source_step, int)
@@ -92,7 +91,10 @@ def partition_repair_targets(
         raise OctreeError("Repair Target source step must be non-negative")
     if step_root is None:
         step_root = f"voxblame/steps/{source_step:06d}"
-    if missing_tree.max_depth != MAX_DEPTH or excess_tree.max_depth != MAX_DEPTH:
+    if any(
+        tree.max_depth != MAX_DEPTH
+        for tree in (missing_tree, excess_tree, reference_tree, candidate_tree)
+    ):
         raise OctreeError("Repair Targets require depth-8 error evidence")
     missing = {int(code) for code in missing_tree.iter_leaf_codes()}
     excess = {int(code) for code in excess_tree.iter_leaf_codes()}
@@ -105,64 +107,28 @@ def partition_repair_targets(
         or not 1 <= active_depth <= MAX_DEPTH
     ):
         raise OctreeError("active repair depth must be an integer from 1 through 8")
-    directions = {code: _MISSING for code in missing}
-    for code in excess:
-        directions[code] = directions.get(code, 0) | _EXCESS
-
-    candidates: list[_InteriorTarget] = []
-    for component in _partition_components(
-        directions,
-        profile=TARGET_PARTITION_PROFILE,
+    candidates = _directional_targets(
+        reference_tree,
+        candidate_tree,
+        missing=missing,
+        excess=excess,
         active_depth=active_depth,
-    ):
-        component_key = _component_key(
-            component,
-            directions,
-            profile=TARGET_PARTITION_PROFILE,
-            active_depth=active_depth,
-        )
-        splits = _split_component(
-            component,
-            maximum_cells=ADAPTIVE_TARGET_SPLIT_MAX_CELLS,
-            start_depth=max(TARGET_SPLIT_DEPTH, active_depth or TARGET_SPLIT_DEPTH),
-        )
-        split_count = len(splits)
-        for split_index, cells in enumerate(splits):
-            mask_bytes, mask_digest, region_count = _region_set(cells)
-            candidates.append(
-                _InteriorTarget(
-                    cells=frozenset(cells),
-                    missing_count=sum(code in missing for code in cells),
-                    excess_count=sum(code in excess for code in cells),
-                    bounds=_canonical_bounds(cells),
-                    mask={
-                        "storage_schema": INTERIOR_REGION_SET_SCHEMA,
-                        "logical_sha256": mask_digest,
-                        "region_count": region_count,
-                    },
-                    mask_bytes=mask_bytes,
-                    component_key=component_key,
-                    split_index=split_index,
-                    split_count=split_count,
-                    split_reason=(
-                        "not_split"
-                        if split_count == 1
-                        else "coarse_octree_locality"
-                    ),
-                    frontier_coverage=len(
-                        {
-                            code >> (3 * (MAX_DEPTH - (active_depth or MAX_DEPTH)))
-                            for code in cells
-                        }
-                    ),
-                )
-            )
-
-    candidates.sort(key=_display_order)
+    )
     ordered: list[dict[str, Any]] = []
     mask_artifacts: dict[str, bytes] = {}
     for display_rank, candidate in enumerate(candidates):
-        target_key = _interior_target_key(source_step, candidate)
+        missing_count = 1 if candidate.direction == "missing" else 0
+        excess_count = 1 if candidate.direction == "excess" else 0
+        target_key = _target_identity_key(
+            source_step=source_step,
+            partition_profile=TARGET_PARTITION_PROFILE,
+            mask_sha256=candidate.mask["logical_sha256"],
+            missing_count=missing_count,
+            excess_count=excess_count,
+            component_key=candidate.component_key,
+            split_index=0,
+            split_count=1,
+        )
         file_name = f"target-{candidate.mask['logical_sha256']}.vbregions"
         relative_path = f"{step_root}/targets/{file_name}"
         mask = {"path": relative_path, **candidate.mask}
@@ -174,18 +140,16 @@ def partition_repair_targets(
                 "display_rank": display_rank,
                 "bounds_canonical": candidate.bounds,
                 "error_profile": {
-                    "missing_surface_count": candidate.missing_count,
-                    "excess_surface_count": candidate.excess_count,
-                    "surface_error_count": (
-                        candidate.missing_count + candidate.excess_count
-                    ),
+                    "missing_surface_count": missing_count,
+                    "excess_surface_count": excess_count,
+                    "surface_error_count": 1,
                 },
                 "mask": mask,
                 "component": {
                     "component_key": candidate.component_key,
-                    "split_index": candidate.split_index,
-                    "split_count": candidate.split_count,
-                    "split_reason": candidate.split_reason,
+                    "split_index": 0,
+                    "split_count": 1,
+                    "split_reason": "not_split",
                 },
                 "exterior": None,
             }
@@ -244,8 +208,6 @@ def partition_repair_targets(
             }
         )
         mask_artifacts[file_name] = exterior_bytes
-        if len(ordered) > TARGET_PAGE_SIZE:
-            ordered.insert(TARGET_PAGE_SIZE - 1, ordered.pop())
 
     for display_rank, target in enumerate(ordered):
         target["display_rank"] = display_rank
@@ -257,6 +219,8 @@ def partition_repair_targets(
         excess,
         profile=TARGET_PARTITION_PROFILE,
         active_depth=active_depth,
+        reference={int(code) for code in reference_tree.iter_leaf_codes()},
+        candidate={int(code) for code in candidate_tree.iter_leaf_codes()},
     )
     return _RepairTargetPartition(
         report={
@@ -284,6 +248,79 @@ def active_repair_depth(errors_by_depth: list[dict[str, Any]]) -> int | None:
     return None
 
 
+def _directional_targets(
+    reference_tree: SurfaceTree,
+    candidate_tree: SurfaceTree,
+    *,
+    missing: set[int],
+    excess: set[int],
+    active_depth: int | None,
+) -> list[_DirectionalTarget]:
+    if active_depth is None:
+        return []
+    shift = 3 * (MAX_DEPTH - active_depth)
+    reference_prefixes = {
+        int(code) >> shift for code in reference_tree.iter_leaf_codes()
+    }
+    candidate_prefixes = {
+        int(code) >> shift for code in candidate_tree.iter_leaf_codes()
+    }
+    candidates: list[_DirectionalTarget] = []
+    for direction, prefixes, support in (
+        ("missing", reference_prefixes - candidate_prefixes, missing),
+        ("excess", candidate_prefixes - reference_prefixes, excess),
+    ):
+        for prefix in prefixes:
+            cells = {code for code in support if code >> shift == prefix}
+            if not cells:
+                raise OctreeError("active-depth target has no directional support")
+            mask_bytes, mask_digest, region_count = _region_set(cells)
+            component_key = _directional_component_key(
+                active_depth, prefix, direction
+            )
+            candidates.append(
+                _DirectionalTarget(
+                    direction=direction,
+                    coarse_prefix=prefix,
+                    bounds=_prefix_bounds(prefix, active_depth),
+                    mask={
+                        "storage_schema": INTERIOR_REGION_SET_SCHEMA,
+                        "logical_sha256": mask_digest,
+                        "region_count": region_count,
+                    },
+                    mask_bytes=mask_bytes,
+                    component_key=component_key,
+                )
+            )
+    candidates.sort(
+        key=lambda item: (
+            item.coarse_prefix,
+            0 if item.direction == "missing" else 1,
+        )
+    )
+    return candidates
+
+
+def _directional_component_key(depth: int, prefix: int, direction: str) -> str:
+    payload = {
+        "profile": TARGET_PARTITION_PROFILE,
+        "active_depth": depth,
+        "prefix": prefix,
+        "direction": direction,
+    }
+    digest = hashlib.sha256(_json_bytes(payload)).hexdigest()
+    return f"directional-cell-{digest[:16]}"
+
+
+def _prefix_bounds(prefix: int, depth: int) -> dict[str, list[float]]:
+    coordinates = decode_octant_prefix(prefix, depth)
+    resolution = 1 << depth
+    return {
+        "min": [-0.5 + value / resolution for value in coordinates],
+        "max": [-0.5 + (value + 1) / resolution for value in coordinates],
+    }
+
+
 def inspect_repair_frontier(
     workspace: str | Path, *, step: int, offset: int = 0
 ) -> dict[str, Any]:
@@ -303,7 +340,10 @@ def inspect_repair_frontier(
     validate_measurement_contract(measurement)
     validate_session_contract(session)
     partition_profile = session["profiles"]["target_partition"]
-    adaptive = partition_profile == TARGET_PARTITION_PROFILE
+    adaptive = partition_profile in {
+        ADAPTIVE_TARGET_PARTITION_PROFILE,
+        TARGET_PARTITION_PROFILE,
+    }
     measured_active_depth = active_repair_depth(measurement["errors_by_depth"])
     active_depth = measured_active_depth if adaptive else None
     interior = [
@@ -399,7 +439,10 @@ def _page_repair_targets(
     validate_measurement_contract(report)
     if report["step"] != step:
         _invalid("$.step", "does not match the requested Measured Step")
-    if report["repair_targets"]["ordering_profile"] != TARGET_ORDERING_PROFILE:
+    if report["repair_targets"]["ordering_profile"] not in {
+        LEGACY_TARGET_ORDERING_PROFILE,
+        TARGET_ORDERING_PROFILE,
+    }:
         _invalid(
             "$.repair_targets.ordering_profile",
             "unsupported Repair Target display profile",
@@ -428,11 +471,15 @@ def _validate_published_partition(
         TypeError,
     ) as exc:
         raise OctreeError("Repair Target partition profile is unavailable") from exc
-    if profile not in {LEGACY_TARGET_PARTITION_PROFILE, TARGET_PARTITION_PROFILE}:
+    if profile not in {
+        LEGACY_TARGET_PARTITION_PROFILE,
+        ADAPTIVE_TARGET_PARTITION_PROFILE,
+        TARGET_PARTITION_PROFILE,
+    }:
         raise OctreeError("Repair Target partition profile is unsupported")
     active_depth = (
         active_repair_depth(measurement["errors_by_depth"])
-        if profile == TARGET_PARTITION_PROFILE
+        if profile in {ADAPTIVE_TARGET_PARTITION_PROFILE, TARGET_PARTITION_PROFILE}
         else MAX_DEPTH
     )
     targets = measurement["repair_targets"]["ordered_targets"]
@@ -466,6 +513,14 @@ def _validate_published_partition(
         excess,
         profile=profile,
         active_depth=active_depth,
+        reference={
+            int(code)
+            for code in read_surface_tree(workspace / "reference.vbsvo").iter_leaf_codes()
+        },
+        candidate={
+            int(code)
+            for code in read_surface_tree(step_root / "candidate.vbsvo").iter_leaf_codes()
+        },
     )
     exterior_targets = [
         target for target in targets if target.get("kind") == "exterior"
@@ -568,7 +623,7 @@ def _partition_components(
         return []
     if profile == LEGACY_TARGET_PARTITION_PROFILE:
         return _connected_components(directions, depth=MAX_DEPTH)
-    if profile != TARGET_PARTITION_PROFILE or active_depth is None:
+    if profile != ADAPTIVE_TARGET_PARTITION_PROFILE or active_depth is None:
         raise OctreeError("unsupported adaptive Repair Target partition state")
 
     shift = 3 * (MAX_DEPTH - active_depth)
@@ -653,25 +708,10 @@ def _component_key(
         "profile": profile,
         "cells": [[code, directions[code]] for code in sorted(component)],
     }
-    if profile == TARGET_PARTITION_PROFILE:
+    if profile == ADAPTIVE_TARGET_PARTITION_PROFILE:
         payload["active_depth"] = active_depth
     digest = hashlib.sha256(_json_bytes(payload)).hexdigest()
     return f"component-{digest[:16]}"
-
-
-def _interior_target_key(
-    source_step: int, target: _InteriorTarget
-) -> str:
-    return _target_identity_key(
-        source_step=source_step,
-        partition_profile=TARGET_PARTITION_PROFILE,
-        mask_sha256=target.mask["logical_sha256"],
-        missing_count=target.missing_count,
-        excess_count=target.excess_count,
-        component_key=target.component_key,
-        split_index=target.split_index,
-        split_count=target.split_count,
-    )
 
 
 def _target_identity_key(
@@ -829,15 +869,6 @@ def _exterior_alert(target: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _display_order(target: _InteriorTarget) -> tuple[Any, ...]:
-    return (
-        -target.frontier_coverage,
-        -(target.missing_count + target.excess_count),
-        *target.bounds["min"],
-        target.mask["logical_sha256"],
-    )
-
-
 def _validate_interior_partition(
     targets: list[dict[str, Any]],
     artifacts: dict[str, bytes],
@@ -846,7 +877,22 @@ def _validate_interior_partition(
     *,
     profile: str = LEGACY_TARGET_PARTITION_PROFILE,
     active_depth: int | None = None,
+    reference: set[int] | None = None,
+    candidate: set[int] | None = None,
 ) -> None:
+    if profile == TARGET_PARTITION_PROFILE:
+        if reference is None or candidate is None:
+            raise OctreeError("directional Repair Target occupancy is unavailable")
+        _validate_directional_partition(
+            targets,
+            artifacts,
+            missing=missing,
+            excess=excess,
+            reference=reference,
+            candidate=candidate,
+            active_depth=active_depth,
+        )
+        return
     directions = {code: _MISSING for code in missing}
     for code in excess:
         directions[code] = directions.get(code, 0) | _EXCESS
@@ -862,7 +908,7 @@ def _validate_interior_partition(
         )
         maximum_cells = (
             ADAPTIVE_TARGET_SPLIT_MAX_CELLS
-            if profile == TARGET_PARTITION_PROFILE
+            if profile == ADAPTIVE_TARGET_PARTITION_PROFILE
             else TARGET_SPLIT_MAX_CELLS
         )
         splits = _split_component(
@@ -870,7 +916,7 @@ def _validate_interior_partition(
             maximum_cells=maximum_cells,
             start_depth=(
                 max(TARGET_SPLIT_DEPTH, active_depth or TARGET_SPLIT_DEPTH)
-                if profile == TARGET_PARTITION_PROFILE
+                if profile == ADAPTIVE_TARGET_PARTITION_PROFILE
                 else TARGET_SPLIT_DEPTH
             ),
         )
@@ -932,6 +978,100 @@ def _validate_interior_partition(
             raise OctreeError("Repair Target target identity mismatch")
     if observed != missing | excess:
         raise OctreeError("Repair Targets do not cover the complete error set")
+
+
+def _validate_directional_partition(
+    targets: list[dict[str, Any]],
+    artifacts: dict[str, bytes],
+    *,
+    missing: set[int],
+    excess: set[int],
+    reference: set[int],
+    candidate: set[int],
+    active_depth: int | None,
+) -> None:
+    if active_depth is None:
+        if targets:
+            raise OctreeError("clear active-depth frontier published interior targets")
+        return
+    shift = 3 * (MAX_DEPTH - active_depth)
+    reference_prefixes = {code >> shift for code in reference}
+    candidate_prefixes = {code >> shift for code in candidate}
+    expected = {
+        (prefix, "missing")
+        for prefix in reference_prefixes - candidate_prefixes
+    } | {
+        (prefix, "excess")
+        for prefix in candidate_prefixes - reference_prefixes
+    }
+    observed: set[tuple[int, str]] = set()
+    for target in targets:
+        path = Path(target["mask"]["path"])
+        data = artifacts.get(path.name)
+        if data is None:
+            raise OctreeError("Repair Target mask artifact is missing")
+        digest = hashlib.sha256(_REGION_SET_DIGEST_DOMAIN + data).hexdigest()
+        if digest != target["mask"]["logical_sha256"]:
+            raise OctreeError("Repair Target mask identity mismatch")
+        cells = _expand_region_set(data)
+        prefixes = {code >> shift for code in cells}
+        if len(prefixes) != 1:
+            raise OctreeError("directional Repair Target mask crosses active-depth cells")
+        prefix = next(iter(prefixes))
+        profile = target["error_profile"]
+        if profile == {
+            "missing_surface_count": 1,
+            "excess_surface_count": 0,
+            "surface_error_count": 1,
+        }:
+            direction = "missing"
+            support = missing
+        elif profile == {
+            "missing_surface_count": 0,
+            "excess_surface_count": 1,
+            "surface_error_count": 1,
+        }:
+            direction = "excess"
+            support = excess
+        else:
+            raise OctreeError("directional Repair Target error profile is invalid")
+        identity = (prefix, direction)
+        if identity in observed or identity not in expected:
+            raise OctreeError("directional Repair Target identity is invalid")
+        observed.add(identity)
+        expected_cells = {code for code in support if code >> shift == prefix}
+        if cells != expected_cells:
+            raise OctreeError("directional Repair Target mask has invalid support")
+        snapshot = json.loads(data)
+        if (
+            target["mask"].get("storage_schema") != INTERIOR_REGION_SET_SCHEMA
+            or target["mask"].get("region_count") != len(snapshot["regions"])
+            or target.get("bounds_canonical") != _prefix_bounds(prefix, active_depth)
+        ):
+            raise OctreeError("directional Repair Target spatial evidence is invalid")
+        component_key = _directional_component_key(active_depth, prefix, direction)
+        component = {
+            "component_key": component_key,
+            "split_index": 0,
+            "split_count": 1,
+            "split_reason": "not_split",
+        }
+        if target.get("component") != component:
+            raise OctreeError("directional Repair Target provenance is invalid")
+        expected_key = _target_identity_key(
+            source_step=target["source_step"],
+            partition_profile=TARGET_PARTITION_PROFILE,
+            mask_sha256=digest,
+            missing_count=profile["missing_surface_count"],
+            excess_count=profile["excess_surface_count"],
+            component_key=component_key,
+            split_index=0,
+            split_count=1,
+        )
+        if target["target_key"] != expected_key:
+            raise OctreeError("directional Repair Target target identity mismatch")
+    if observed != expected:
+        raise OctreeError("directional Repair Targets do not cover the net frontier")
 
 
 def _json_bytes(value: dict[str, Any]) -> bytes:

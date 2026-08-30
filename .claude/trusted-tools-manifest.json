@@ -432,8 +432,8 @@
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/contracts.py",
-      "sha256": "633381fbf44fddeea9186692d942ef5499fd4ae4435d58ba55c18c92f0f2ba71",
-      "size": 30090
+      "sha256": "a60edf6a592fafcbd1ec3a57b7de597798c8e003f02da736b52cb801099cd21a",
+      "size": 30764
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/errors.py",
@@ -452,8 +452,8 @@
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/measurement.py",
-      "sha256": "8bcec0de4b5ac8246daeb7a5c4a1316ce451707eee3eaa3ba571bdbade5b65cb",
-      "size": 24049
+      "sha256": "8ebb8641ae967c051b37abd1edd5e99af6c434b804756d1d5498b325a8a6ce17",
+      "size": 24425
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/prepare_reference.py",
@@ -467,13 +467,13 @@
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/region_diff.py",
-      "sha256": "395183be70d026eceef463bab7da277c3ff85af499b421fdc888c50ad1004ecc",
-      "size": 49106
+      "sha256": "7698bb008e971f272ada2b77162eb2165f1833398d2a9148981bafcec1da57ef",
+      "size": 49396
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/targets.py",
-      "sha256": "993791e2d8b0d5f95dd999c8574fe2f04609a5117befe72826c17b999c2d8c9e",
-      "size": 36574
+      "sha256": "5675aff5deb491136edf3df5bde06fa2b4b601c6b2e5cbd721e364e3740f5eab",
+      "size": 41915
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/tree.py",

@@ -61,9 +61,10 @@ or non-string values fail closed.
    have strictly positive volume overlap with the Component's canonical bounds;
    face, edge, or point contact does not count.
 3. Read `residual_summary.repair_frontier.active_depth` first. When it is
-   non-null, use the active-depth interior targets and their
+   non-null, use the active-depth directional targets and their
    `bounds_canonical` values to pick one residual you can plausibly move with
-   a source edit. Also inspect any exterior targets on the same page: they
+   a source edit. `missing` means add geometry; `excess` means remove or shrink
+   geometry. Also inspect any `exterior` targets on the same page: they
    are independent actionable residuals, not part of the interior frontier.
 4. Make that edit under `/candidate/work/source/`. Do not touch any
    other file the supervisor named as its own.
@@ -103,7 +104,7 @@ Suppose the parent Measured Step response reported:
 
 - `acceptance_state`: `unaccepted`
 - `residual_summary.repair_frontier.active_depth`: `3`
-- `repair_targets.items[0].kind`: `interior`
+- `repair_targets.items[0].kind`: `excess`
 - `repair_targets.items[0].bounds_canonical`: `min=[0.12, -0.08, 0.04]`,
   `max=[0.20, 0.08, 0.12]`
 

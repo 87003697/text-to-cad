@@ -82,16 +82,16 @@ canonical operations above.
    accepted only when all three objective facts are true.
 6. Call `voxblame-targets`, read `repair_frontier.active_depth`, inspect any
    exterior `alerts`, then follow `repair_targets.next_offset` until every
-   interior Repair Target has been inspected. Mesh Compare owns the
+   directional interior Repair Target has been inspected. Mesh Compare owns the
    deterministic repair depth; the Agent must not choose or advance it.
-   The compact CLI page exposes `missing_surface_count` and
-   `excess_surface_count` directly on each `repair_targets.items[]` and exterior
+   The compact CLI page exposes the single missing/excess direction through
+   its counts on each `repair_targets.items[]` and exterior
    signals in separate top-level `alerts`; use rich fields such as
    `error_profile` and `exterior_surface` only in persisted report/summary
    documents.
-   Targets are grouped at that depth while retaining exact depth-8 masks. Item
-   order is deterministic attention order by objective error impact, not a CAD
-   edit instruction.
+   Each target is one net-error cell at that depth while retaining a
+   single-direction depth-8 support mask. Item order is deterministic by cell
+   and direction, not a CAD edit instruction.
 7. After an explicit child Measured Step exists, run `voxblame-diff` with the
    frozen Repair Batch. Treat exact-mask, halo, outside-selected, trajectory,
    and exterior evidence as facts; the Agent writes the assessment.
