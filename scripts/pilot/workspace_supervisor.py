@@ -175,6 +175,10 @@ class WorkspaceAPI(Protocol):
         self, workspace: Path, *, step: int
     ) -> Mapping[str, Any]: ...
 
+    def read_step_repair_targets(
+        self, workspace: Path, *, step: int, offset: int
+    ) -> Mapping[str, Any]: ...
+
     def read_current_step_preview_png(self, workspace: Path, *, step: int) -> bytes: ...
 
     def finalize_from_agent_selection_claim(
@@ -1344,6 +1348,7 @@ class WorkspaceSupervisor:
             next_intents.append("observe_reference")
             next_intents.append("start_attempt")
             if workspace_state == "preterminal":
+                next_intents.append("inspect_repair_targets")
                 next_intents.append("select_and_finalize")
         result: dict[str, Any] = {
             "state": state,
@@ -2191,6 +2196,20 @@ class WorkspaceSupervisor:
         step_number = self.registry.resolve(preview_handle, "preview")
         return self.inspect_formal_preview(preview_handle), self._read_committed_step_preview_png(step_number)
 
+    def inspect_repair_targets(
+        self, step_handle: str, offset: int
+    ) -> Mapping[str, Any]:
+        step_number = self.registry.resolve(step_handle, "step")
+        status = self.workspace_status(self.workspace_handle)
+        if "inspect_repair_targets" not in status["permitted_next_intents"]:
+            raise SupervisorError("invalid_operation")
+        try:
+            return self.workspace_api.read_step_repair_targets(
+                self.workspace, step=step_number, offset=offset
+            )
+        except Exception as exc:
+            raise SupervisorError("repair_targets_unavailable") from exc
+
     def _submit_publication_request(
         self,
         workspace_handle: str,
@@ -2270,6 +2289,7 @@ class WorkspaceSupervisor:
                     "subtype": published["subtype"],
                     "permitted_next_intents": [
                         "start_attempt",
+                        "inspect_repair_targets",
                         "select_and_finalize",
                         "workspace_status",
                     ],
@@ -2286,6 +2306,7 @@ class WorkspaceSupervisor:
                 "decision_facts": decision_facts,
                 "permitted_next_intents": [
                     "inspect_formal_preview",
+                    "inspect_repair_targets",
                     "start_attempt",
                     "select_and_finalize",
                     "workspace_status",

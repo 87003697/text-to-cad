@@ -203,9 +203,10 @@ ${PROMPT_PREAMBLE}
 This is an authority-hidden Agent Surface execution. Read the opaque bootstrap
 contract from the fixed candidate mount /candidate/bootstrap.json. Use only
 ordinary exec_command calls to run the fixed client
-python3 /agent-surface/client.py for these seven JSON intents:
+python3 /agent-surface/client.py for these eight JSON intents:
 workspace_status, start_attempt, run_candidate_tool,
-submit_step_zero, submit_repair, select_and_finalize, and observe_reference.
+submit_step_zero, submit_repair, inspect_repair_targets,
+select_and_finalize, and observe_reference.
 For each call, provide exactly one closed JSON request envelope on stdin:
 {"schema":"mesh-to-cad.agent-intent/1","intent":"<intent>","args":{...}}.
 For observe_reference, args must be exactly
@@ -218,6 +219,13 @@ completed publication response is unavailable, call workspace_status; its
 publication_recovery, when present, is the exact published response and must
 be used without resubmitting W1. Do not issue another intent while a client
 session is live.
+When a published Step has positive decision_facts.repair_targets.remaining,
+use inspect_repair_targets with that same step_handle and each returned
+next_offset, starting at offset 0, until next_offset is null before selecting a Repair Target. Treat
+the concatenated pages as one attention order; do not guess ranks or treat the
+first eight as a priority shortlist. Copy the chosen public
+{rank,kind,bounds_canonical} triple unchanged into the repair plan. Do not call
+inspect_repair_targets while an Attempt is active.
 On an error, preserve its classification and do not retry blindly. For a closed
 repair_evidence_failed response, use only its subtype to choose a permitted next
 intent; never request host diagnostics. After each published Step response with a preview_handle, emit no text before calling the only MCP

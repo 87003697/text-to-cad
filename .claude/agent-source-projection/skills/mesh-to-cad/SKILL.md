@@ -60,6 +60,10 @@ a closed result plus the list of intents permitted next.
   Responses uses namespace `mcp__agent_surface` with child
   `inspect_formal_preview`. It returns an image block, never a path or image
   bytes in JSON.
+- `inspect_repair_targets` — use a published Step's opaque `step_handle` and
+  the exact `next_offset` returned by the previous page to read every committed
+  Repair Target through the fixed client. It returns only the public
+  `{rank, kind, bounds_canonical}` triples.
 - `select_and_finalize` — request the supervisor's final result from an
   opaque `step_handle` naming the Selected Step plus an authored
   selection handle (a bounded semantic claim) and notes handle. You do
@@ -90,7 +94,7 @@ handle opaque. There is no `tool`, `argv`, `command`, or
 
 ## Fixed-client transport
 
-Invoke the seven JSON intents through ordinary `exec_command`, running only the
+Invoke the eight JSON intents through ordinary `exec_command`, running only the
 fixed client `python3 /agent-surface/client.py`. Feed it exactly one closed JSON
 object on stdin and read its one JSON response before issuing another intent.
 If a long-running call returns an `exec_command` session ID before its JSON
@@ -127,6 +131,7 @@ The `args` object must have exactly the fields for its intent:
   `candidate_handle`, `operation_handle`.
 - `submit_step_zero` and `submit_repair`: `workspace_handle`,
   `attempt_handle`, `candidate_handle`.
+- `inspect_repair_targets`: `step_handle`, `offset`.
 - `select_and_finalize`: `workspace_handle`, `step_handle`,
   `selection_handle`, `notes_handle`.
 - `observe_reference`: `reference_handle` and an `observation` object that is
@@ -142,14 +147,14 @@ Every successful client response is one JSON object with the response envelope:
 {
   "ok": true,
   "response": {
-    "schema": "mesh-to-cad.agent-response/2",
+    "schema": "mesh-to-cad.agent-response/3",
     "intent": "<same intent>",
     "result": { "...": "..." }
   }
 }
 ```
 
-For the six workflow intents, `result` has the following closed shapes:
+Each intent has its own closed result shape:
 
 - `workspace_status`: `state`, `workspace_identity`, `budgets`,
   `permitted_next_intents`, and, only for an unreceived current published
@@ -169,6 +174,10 @@ For the six workflow intents, `result` has the following closed shapes:
 - `select_and_finalize`: `state`, `final_delivery_handle`,
   `permitted_next_intents`.
 - `inspect_formal_preview`: `state`, `preview_handle`, `permitted_next_intents`, plus an MCP image block.
+- `inspect_repair_targets`: `schema`, `step_ordinal`, `total`, `returned`,
+  `remaining`, `offset`, `next_offset`, `items`. Its schema is
+  `mesh-to-cad.repair-target-page/1`; every item is exactly
+  `{rank, kind, bounds_canonical}`.
 
 `observe_reference` is not a workflow-state response. Its `result` is exactly
 `{"observation":{"method":"<method>","value":{...}}}`. A `summary` value
@@ -524,10 +533,14 @@ Rules for using decision facts:
   cite; you never override them, and you never derive acceptance from
   authored content.
 - Base your next repair hypothesis on them: `repair_frontier` and
-  `repair_targets` identify the active action layer and coarse target facts;
-   `repair_targets` names the top-ranked residual regions by kind and
-   supplies only the stable selection identities needed by the repair
-   plan.
+  `repair_targets` identify the active action layer and coarse target facts.
+  When `repair_targets.remaining` is positive, call
+  `inspect_repair_targets` with offset `0` on the same `step_handle`, then
+  follow each returned `next_offset` until it is `null`, before selecting any
+  target. Treat the concatenated rank order as
+  the complete attention order; do not guess a rank or treat the first eight
+  as a priority shortlist. Copy a selected target's public
+  `{rank, kind, bounds_canonical}` triple unchanged into the repair plan.
 - Compare candidate frontiers lexicographically: a greater `active_depth`
   is better; at the same depth, a smaller `surface_error_count` is better.
   Equal depth and error count is a tie. Use missing and excess counts for
@@ -537,10 +550,9 @@ Rules for using decision facts:
   specified above before spending another attempt.
 - If `acceptance_state` is `acceptance_satisfied`, do not start
   another repair; proceed to `select_and_finalize`.
-- The decision-facts response is capped alongside the rest of the
-  intent envelope; there is no larger view. Unknown fields, extra
-  keys, or non-finite numbers are closed errors on our side, not on
-  yours.
+- The decision-facts response carries the first target page. Read later pages
+  only through `inspect_repair_targets`; unknown fields, extra keys, or
+  non-finite numbers are closed errors on our side, not on yours.
 
 ## Bounded loop shape
 
@@ -554,7 +566,10 @@ The bounded loop the supervisor enforces is:
    candidate. Each call returns fresh handles.
 4. Use `submit_step_zero` to submit the measured initial step. The
    supervisor retires that Attempt and resets `/candidate/work`.
-5. Inspect the returned formal preview, then create or update the
+5. Inspect the returned formal preview. If the first Repair Target page has
+   `remaining > 0`, call `inspect_repair_targets` at offset `0`, then follow
+   every `next_offset` on the same Step before selecting a target. Then create
+   or update the
    Reconstruction Spec before forming a repair hypothesis. Replace
    `/candidate/plan.json` with a `voxblame.repair-batch/1` that repeats the
    selected coarse target's `{rank, kind, bounds_canonical}` facts.

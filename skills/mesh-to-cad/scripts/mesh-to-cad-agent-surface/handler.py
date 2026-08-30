@@ -15,7 +15,7 @@ from typing import Any, Callable, Protocol
 
 
 REQUEST_SCHEMA = "mesh-to-cad.agent-intent/1"
-RESPONSE_SCHEMA = "mesh-to-cad.agent-response/2"
+RESPONSE_SCHEMA = "mesh-to-cad.agent-response/3"
 ERROR_SCHEMA = "mesh-to-cad.agent-error/1"
 
 MAX_REQUEST_BYTES = 64 * 1024
@@ -69,6 +69,10 @@ class SupervisorPorts(Protocol):
     def inspect_formal_preview_with_preview(
         self, preview_handle: str
     ) -> tuple[Mapping[str, Any], bytes | None]: ...
+
+    def inspect_repair_targets(
+        self, step_handle: str, offset: int
+    ) -> Mapping[str, Any]: ...
 
     def select_and_finalize(
         self,
@@ -253,6 +257,7 @@ def _next_result(value: Any, path: str) -> list[str]:
 
 
 DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/2"
+REPAIR_TARGET_PAGE_SCHEMA = "mesh-to-cad.repair-target-page/1"
 _DECISION_FACT_MAX_TARGETS = 8
 _ACCEPTANCE_STATE_VALUES = ("acceptance_satisfied", "unaccepted")
 
@@ -691,6 +696,56 @@ def _validate_preview_result(value: Any, path: str) -> dict[str, Any]:
     return _result_fields(value, (("state", "state"), ("preview_handle", "handle"), ("permitted_next_intents", "next")), path, "inspect_formal_preview")
 
 
+def _validate_repair_target_page_result(value: Any, path: str) -> dict[str, Any]:
+    value = _closed(
+        value,
+        (
+            "schema",
+            "step_ordinal",
+            "total",
+            "returned",
+            "remaining",
+            "offset",
+            "next_offset",
+            "items",
+        ),
+        path,
+    )
+    if value["schema"] != REPAIR_TARGET_PAGE_SCHEMA:
+        _fail("supervisor_contract_violation", f"{path}.schema")
+    step = _integer(value["step_ordinal"], f"{path}.step_ordinal", maximum=MAX_REPAIR_STEP)
+    total = _integer(value["total"], f"{path}.total")
+    returned = _integer(
+        value["returned"], f"{path}.returned", maximum=_DECISION_FACT_MAX_TARGETS
+    )
+    remaining = _integer(value["remaining"], f"{path}.remaining")
+    offset = _integer(value["offset"], f"{path}.offset")
+    if (
+        offset % _DECISION_FACT_MAX_TARGETS
+        or (total == 0 and (offset != 0 or returned != 0))
+        or (total > 0 and (offset >= total or returned == 0))
+    ):
+        _fail("supervisor_contract_violation", path)
+    if offset + returned + remaining != total or (remaining and returned != _DECISION_FACT_MAX_TARGETS):
+        _fail("supervisor_contract_violation", path)
+    expected_next = offset + returned if remaining else None
+    if value["next_offset"] != expected_next:
+        _fail("supervisor_contract_violation", f"{path}.next_offset")
+    items = _repair_target_items(value["items"], f"{path}.items", returned, step=step)
+    if [item["rank"] for item in items] != list(range(offset, offset + returned)):
+        _fail("supervisor_contract_violation", f"{path}.items")
+    return {
+        "schema": REPAIR_TARGET_PAGE_SCHEMA,
+        "step_ordinal": step,
+        "total": total,
+        "returned": returned,
+        "remaining": remaining,
+        "offset": offset,
+        "next_offset": expected_next,
+        "items": items,
+    }
+
+
 def _validate_finalize_result(value: Any, path: str) -> dict[str, Any]:
     return _result_fields(value, (("state", "state"), ("final_delivery_handle", "handle"), ("permitted_next_intents", "next")), path, "select_and_finalize")
 
@@ -711,6 +766,7 @@ _OPERATION_SPECS = (
     _OperationSpec("submit_step_zero", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_step_zero_result, "Submit one measured Step 0 through the supervisor."),
     _OperationSpec("submit_repair", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_repair_result, "Submit one measured Repair Cycle through the supervisor."),
     _OperationSpec("inspect_formal_preview", ((_FieldSpec("preview_handle", "handle"),),), _validate_preview_result, "Inspect one committed formal preview."),
+    _OperationSpec("inspect_repair_targets", ((_FieldSpec("step_handle", "handle"), _FieldSpec("offset", "offset")),), _validate_repair_target_page_result, "Read one committed Repair Target page."),
     _OperationSpec("select_and_finalize", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "step_handle", "selection_handle", "notes_handle")),), _validate_finalize_result, "Select and request supervisor-owned Final Delivery."),
     _OperationSpec("observe_reference", ((
         _FieldSpec("reference_handle", "handle"), _FieldSpec("observation", "observation_request"),
@@ -761,6 +817,10 @@ def _validate_args(spec: _OperationSpec, args: dict[str, Any]) -> None:
         path = f"$.args.{field.name}"
         if field.kind == "handle":
             _handle(args[field.name], path)
+        elif field.kind == "offset":
+            offset = _step(args[field.name], path)
+            if offset % _DECISION_FACT_MAX_TARGETS:
+                _fail("invalid_request", path)
         elif field.kind == "observation_request":
             _validate_observation_request(args[field.name], path)
 
@@ -768,6 +828,8 @@ def _validate_args(spec: _OperationSpec, args: dict[str, Any]) -> None:
 def _field_schema(kind: str) -> dict[str, Any]:
     if kind == "handle":
         return {"type": "string", "pattern": _HANDLE_PATTERN}
+    if kind == "offset":
+        return {"type": "integer", "minimum": 0}
     if kind == "observation_request":
         empty = {"type": "object", "additionalProperties": False, "properties": {}}
         return {
@@ -881,6 +943,8 @@ class AgentSurface:
                     result, preview_png = self._ports.inspect_formal_preview_with_preview(**args)
                 else:
                     result = self._ports.inspect_formal_preview(**args)
+            elif intent == "inspect_repair_targets":
+                result = self._ports.inspect_repair_targets(**args)
             elif intent == "select_and_finalize":
                 result = self._ports.select_and_finalize(**args)
             else:
@@ -919,6 +983,7 @@ __all__ = [
     "AgentSurface",
     "AgentSurfaceError",
     "DECISION_FACTS_SCHEMA",
+    "REPAIR_TARGET_PAGE_SCHEMA",
     "ERROR_SCHEMA",
     "INTENTS",
     "REQUEST_SCHEMA",

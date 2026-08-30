@@ -22,7 +22,8 @@ fixture rather than adding a dependency.
 Agent requests use the closed `mesh-to-cad.agent-intent/1` envelope and only
 the following intents: `workspace_status`, `start_attempt`,
 `run_candidate_tool`, `submit_step_zero`, `submit_repair`,
-`select_and_finalize`, and `observe_reference`. Workspace, Attempt, candidate,
+`inspect_repair_targets`, `select_and_finalize`, and `observe_reference`.
+Workspace, Attempt, candidate,
 plan, evidence, selection, notes, and reference values cross this seam only as
 opaque handles. `run_candidate_tool` accepts a supervisor-registered operation
 handle, never an argv or command string. Reference observations are limited to
@@ -56,6 +57,15 @@ is not an Agent contract and is not described as trusted production
 evidence. Real trusted measurement/preview/diff providers are the next
 required correctness landing (A-A2); until then, candidate-authored evidence
 must be treated as an internal fixture, not production authority.
+
+`inspect_repair_targets` accepts exactly a returned opaque `step_handle` and a
+non-negative page-start `offset`. W1 reads that historical Measured Step's
+committed full Repair Target authority and returns at most eight consecutive
+public `{rank, kind, bounds_canonical}` items. `next_offset` is the next
+consecutive page start or `null`; target keys, masks, paths, and raw octree
+identities remain behind the supervisor. Paging is available only between
+Attempts, so an active Attempt cannot mix target observations from another
+workflow state. An empty target set has one valid empty page at offset zero.
 
 The standalone adapters have no supervisor discovery fallback: without W4
 ports they return a closed `supervisor_unavailable` error. W4 owns the concrete

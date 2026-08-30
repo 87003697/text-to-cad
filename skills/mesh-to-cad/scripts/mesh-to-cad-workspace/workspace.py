@@ -1210,6 +1210,7 @@ def seed_repair_source_from_parent_step(
 
 
 DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/2"
+REPAIR_TARGET_PAGE_SCHEMA = "mesh-to-cad.repair-target-page/1"
 _DIRECTIONAL_TARGET_PARTITION_PROFILE = "repair_target_partition/3"
 _MAX_DECISION_FACT_TARGETS = 8
 _MAX_DEPTH = 8
@@ -1377,7 +1378,9 @@ def _resolve_repair_provider_plan(
     return resolved
 
 
-def _project_repair_targets(workspace: Path, value: Any, *, active_depth: int | None) -> Any:
+def _project_repair_target_items(
+    workspace: Path, value: Any, *, active_depth: int | None
+) -> list[dict[str, Any]]:
     _require_directional_target_profile(workspace)
     if not isinstance(value, Mapping):
         _decision_facts_fail("decision-facts repair targets are malformed")
@@ -1386,7 +1389,7 @@ def _project_repair_targets(workspace: Path, value: Any, *, active_depth: int | 
     if not isinstance(items, list) or len(items) != total:
         _decision_facts_fail("decision-facts repair target authority is malformed")
     if total == 0:
-        return None
+        return []
     projected: list[dict[str, Any]] = []
     for item in items:
         if not isinstance(item, Mapping):
@@ -1400,6 +1403,15 @@ def _project_repair_targets(workspace: Path, value: Any, *, active_depth: int | 
         projected.append({"rank": rank, "kind": kind, "bounds_canonical": bounds})
     if [item["rank"] for item in projected] != list(range(total)):
         _decision_facts_fail("decision-facts repair target order is malformed")
+    return projected
+
+
+def _project_repair_targets(workspace: Path, value: Any, *, active_depth: int | None) -> Any:
+    projected = _project_repair_target_items(
+        workspace, value, active_depth=active_depth
+    )
+    if not projected:
+        return None
     projected_items = projected[:_MAX_DECISION_FACT_TARGETS]
     return {
         "total": len(projected),
@@ -1606,6 +1618,66 @@ def read_current_step_decision_facts(
         workspace=workspace,
         repair_target_document=full_measurement_document,
     )
+
+
+def read_step_repair_targets(
+    workspace: Path, *, step: int, offset: int
+) -> dict[str, Any]:
+    """Return one closed page of committed Repair Targets for a Measured Step."""
+
+    workspace = Path(workspace).resolve()
+    if type(step) is not int or isinstance(step, bool) or step < 0 or step > MAX_REPAIR_CYCLES:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "repair targets requested for an out-of-range step ordinal",
+        )
+    if type(offset) is not int or isinstance(offset, bool) or offset < 0:
+        raise WorkspaceError("invalid_workspace_path", "repair target offset is invalid")
+    step_document = _read_authority_json(
+        workspace,
+        workspace / "steps" / f"{step:06d}" / "step.json",
+        f"$.steps[{step}]",
+    )
+    if step_document.get("step") != step:
+        _decision_facts_fail("step manifest ordinal conflicts with request")
+    measurement_relative = step_document.get("measurement_path")
+    if not isinstance(measurement_relative, str) or not measurement_relative.startswith(
+        f"voxblame/steps/{step:06d}/"
+    ):
+        _decision_facts_fail("step manifest measurement binding is malformed")
+    bound_measurement_document = _read_authority_json(
+        workspace,
+        workspace / measurement_relative,
+        f"$.steps[{step}].measurement",
+    )
+    measurement_document = _read_authority_json(
+        workspace,
+        workspace / "voxblame" / "steps" / f"{step:06d}" / "measurement.json",
+        f"$.voxblame.steps[{step}].measurement",
+    )
+    residual_summary = _project_residual_summary(bound_measurement_document)
+    projected = _project_repair_target_items(
+        workspace,
+        measurement_document.get("repair_targets"),
+        active_depth=residual_summary["repair_frontier"]["active_depth"],
+    )
+    total = len(projected)
+    if offset % _MAX_DECISION_FACT_TARGETS or (
+        total == 0 and offset != 0
+    ) or (total > 0 and offset >= total):
+        raise WorkspaceError("invalid_workspace_path", "repair target offset is not a page start")
+    items = projected[offset : offset + _MAX_DECISION_FACT_TARGETS]
+    next_offset = offset + len(items)
+    return {
+        "schema": REPAIR_TARGET_PAGE_SCHEMA,
+        "step_ordinal": step,
+        "total": total,
+        "returned": len(items),
+        "remaining": total - next_offset,
+        "offset": offset,
+        "next_offset": next_offset if next_offset < total else None,
+        "items": items,
+    }
 
 
 def read_current_step_preview_png(workspace: Path, *, step: int) -> bytes:
@@ -3236,6 +3308,7 @@ def _fail(classification: str, detail: str, path: str = "$") -> None:
 __all__ = [
     "CONTENT_MANIFEST_SCHEMA",
     "DECISION_FACTS_SCHEMA",
+    "REPAIR_TARGET_PAGE_SCHEMA",
     "DEFAULT_COMMAND_SECONDS",
     "ExecutionScope",
     "FAILED_ATTEMPT_RESULTS",
@@ -3263,6 +3336,7 @@ __all__ = [
     "publish_step_zero_from_candidate",
     "read_canonical_reference_binding",
     "read_current_step_decision_facts",
+    "read_step_repair_targets",
     "read_terminal_locator",
     "record_attempt",
     "recover_workspace",
