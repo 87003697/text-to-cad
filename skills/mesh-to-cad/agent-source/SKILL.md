@@ -66,7 +66,7 @@ a closed result plus the list of intents permitted next.
   `{rank, kind, bounds_canonical}` triples.
 - `observe_target_section` — use a published Step's opaque `step_handle` and
   one public target rank to compare fixed local Reference and candidate
-  section profiles.
+  core and adjacent-neighborhood section profiles.
 - `select_and_finalize` — request the supervisor's final result from an
   opaque `step_handle` naming the Selected Step plus an authored
   selection handle (a bounded semantic claim) and notes handle. You do
@@ -154,7 +154,7 @@ Every successful client response is one JSON object with the response envelope:
 {
   "ok": true,
   "response": {
-    "schema": "mesh-to-cad.agent-response/4",
+    "schema": "mesh-to-cad.agent-response/5",
     "intent": "<same intent>",
     "result": { "...": "..." }
   }
@@ -186,9 +186,10 @@ Each intent has its own closed result shape:
   `mesh-to-cad.repair-target-page/1`; every item is exactly
   `{rank, kind, bounds_canonical}`.
 - `observe_target_section`: exactly `schema`, `rank`, `reference`, and
-  `candidate`, with schema `mesh-to-cad.target-section-observation/1`.
-  Each side contains only `triangle_count` and fixed X/Y/Z eight-slab
-  `profiles`.
+  `candidate`, with schema `mesh-to-cad.target-section-observation/2`.
+  Each side contains exactly `core` and `neighborhood`. `core` contains only
+  `triangle_count` and fixed X/Y/Z eight-slab `profiles`; `neighborhood` has
+  the same shape for missing/excess targets and is `null` for exterior targets.
 
 `observe_reference` is not a workflow-state response. Its `result` is exactly
 `{"observation":{"method":"<method>","value":{...}}}`. A `summary` value
@@ -554,9 +555,13 @@ Rules for using decision facts:
   `{rank, kind, bounds_canonical}` triple unchanged into the repair plan.
   Before writing the plan, call `observe_target_section` for the small set of
   competing or semantically relevant targets you are considering. Do not
-  observe every target. This local geometry cannot change `kind`, replace the
-  Reconstruction Spec, identify a Component, or establish semantic ownership.
-  If either side has only one or two triangles, treat it as
+  observe every target, but observe at least one target for each distinct
+  geometry pair under consideration. The `core` locates the target cell; the
+  `neighborhood` describes adjacent Reference and candidate surface. Exterior
+  targets expose only the core. This local geometry cannot change `kind`,
+  replace the Reconstruction Spec, identify a Component, establish semantic
+  ownership, or turn normals into a semantic label. If any profile used by
+  your hypothesis has only one or two triangles, treat it as
   `ambiguous_low_sample` and make no directional or semantic claim from its
   normals.
 - Compare candidate frontiers lexicographically: a greater `active_depth`
@@ -589,7 +594,10 @@ The bounded loop the supervisor enforces is:
    every `next_offset` on the same Step before selecting a target. Then create
    or update the Reconstruction Spec. Observe the few competing or semantically
    relevant target ranks with `observe_target_section` before forming a repair
-   hypothesis; preserve low-sample ambiguity and do not infer Components. Replace
+   hypothesis, including at least one per distinct geometry pair; use the core
+   to locate the cell and the neighborhood only to understand adjacent surface.
+   Preserve low-sample ambiguity and do not infer Components or semantics from
+   normals. Replace
    `/candidate/plan.json` with a `voxblame.repair-batch/1` that repeats the
    selected coarse target's `{rank, kind, bounds_canonical}` facts.
    Bind every Planned Edit to one existing semantic Component with

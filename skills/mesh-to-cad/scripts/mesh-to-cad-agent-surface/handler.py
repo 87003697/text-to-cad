@@ -15,7 +15,7 @@ from typing import Any, Callable, Protocol
 
 
 REQUEST_SCHEMA = "mesh-to-cad.agent-intent/1"
-RESPONSE_SCHEMA = "mesh-to-cad.agent-response/4"
+RESPONSE_SCHEMA = "mesh-to-cad.agent-response/5"
 ERROR_SCHEMA = "mesh-to-cad.agent-error/1"
 
 MAX_REQUEST_BYTES = 64 * 1024
@@ -262,7 +262,7 @@ def _next_result(value: Any, path: str) -> list[str]:
 
 DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/2"
 REPAIR_TARGET_PAGE_SCHEMA = "mesh-to-cad.repair-target-page/1"
-TARGET_SECTION_OBSERVATION_SCHEMA = "mesh-to-cad.target-section-observation/1"
+TARGET_SECTION_OBSERVATION_SCHEMA = "mesh-to-cad.target-section-observation/2"
 _DECISION_FACT_MAX_TARGETS = 8
 _ACCEPTANCE_STATE_VALUES = ("acceptance_satisfied", "unaccepted")
 
@@ -776,11 +776,30 @@ def _validate_target_section_result(value: Any, path: str) -> dict[str, Any]:
     value = _closed(value, ("schema", "rank", "reference", "candidate"), path)
     if value["schema"] != TARGET_SECTION_OBSERVATION_SCHEMA:
         _fail("supervisor_contract_violation", f"{path}.schema")
+    sides: dict[str, dict[str, Any]] = {}
+    neighborhood_null: bool | None = None
+    for name in ("reference", "candidate"):
+        side = _closed(value[name], ("core", "neighborhood"), f"{path}.{name}")
+        neighborhood = side["neighborhood"]
+        is_null = neighborhood is None
+        if neighborhood_null is not None and neighborhood_null != is_null:
+            _fail("supervisor_contract_violation", f"{path}.{name}.neighborhood")
+        neighborhood_null = is_null
+        sides[name] = {
+            "core": _target_section_side(side["core"], f"{path}.{name}.core"),
+            "neighborhood": (
+                None
+                if is_null
+                else _target_section_side(
+                    neighborhood, f"{path}.{name}.neighborhood"
+                )
+            ),
+        }
     return {
         "schema": TARGET_SECTION_OBSERVATION_SCHEMA,
         "rank": _integer(value["rank"], f"{path}.rank"),
-        "reference": _target_section_side(value["reference"], f"{path}.reference"),
-        "candidate": _target_section_side(value["candidate"], f"{path}.candidate"),
+        "reference": sides["reference"],
+        "candidate": sides["candidate"],
     }
 
 

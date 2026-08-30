@@ -2236,19 +2236,41 @@ class WorkspaceSupervisor:
             binding = self.workspace_api.bind_step_target_section(
                 self.workspace, step=step_number, rank=rank
             )
-            reference = self._target_section_profile(
-                binding["reference_path"], binding["bounds_canonical"]
+            core_bounds = binding["core_bounds_canonical"]
+            neighborhood_bounds = binding["neighborhood_bounds_canonical"]
+            reference_core = self._target_section_profile(
+                binding["reference_path"], core_bounds
             )
-            candidate = self._target_section_profile(
-                binding["candidate_path"], binding["bounds_canonical"]
+            candidate_core = self._target_section_profile(
+                binding["candidate_path"], core_bounds
+            )
+            reference_neighborhood = (
+                self._target_section_profile(
+                    binding["reference_path"], neighborhood_bounds
+                )
+                if neighborhood_bounds is not None
+                else None
+            )
+            candidate_neighborhood = (
+                self._target_section_profile(
+                    binding["candidate_path"], neighborhood_bounds
+                )
+                if neighborhood_bounds is not None
+                else None
             )
         except Exception as exc:
             raise SupervisorError("target_section_unavailable") from exc
         return {
-            "schema": "mesh-to-cad.target-section-observation/1",
+            "schema": "mesh-to-cad.target-section-observation/2",
             "rank": rank,
-            "reference": reference,
-            "candidate": candidate,
+            "reference": {
+                "core": reference_core,
+                "neighborhood": reference_neighborhood,
+            },
+            "candidate": {
+                "core": candidate_core,
+                "neighborhood": candidate_neighborhood,
+            },
         }
 
     def _submit_publication_request(

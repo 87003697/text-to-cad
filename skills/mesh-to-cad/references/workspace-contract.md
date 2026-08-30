@@ -73,8 +73,12 @@ and one public target `rank`, and is available only between Attempts in the
 preterminal state. W1 resolves that rank through the same committed directional
 target projection as paging, while W3 privately binds the canonical Reference
 and that Step's committed candidate mesh. Its
-`mesh-to-cad.target-section-observation/1` result contains only the rank plus
-Reference and candidate triangle counts and fixed X/Y/Z eight-slab profiles.
+`mesh-to-cad.target-section-observation/2` result contains only the rank plus
+Reference and candidate `core` and `neighborhood` profiles. Each profile has a
+triangle count and fixed X/Y/Z eight-slab values. For missing/excess targets,
+W1 derives the fixed one-cell neighborhood from that Step's committed Active
+Depth and clips it to the canonical frame. For exterior targets both
+neighborhoods are `null`, while the core remains available.
 It mints no handle, accepts no arbitrary bounds, and exposes no target key,
 mask, path, Depth-8 identity, Component, or capability detail.
 

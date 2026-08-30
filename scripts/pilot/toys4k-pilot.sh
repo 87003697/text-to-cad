@@ -241,12 +241,15 @@ first eight as a priority shortlist. Copy the chosen public
 {rank,kind,bounds_canonical} triple unchanged into the repair plan. Do not call
 inspect_repair_targets while an Attempt is active.
 Before writing the plan, call observe_target_section for only the few competing
-or semantically relevant public ranks under consideration. Its fixed local
-profiles are geometric evidence only: they cannot change target kind, replace
-the Spec, identify a Component, or establish semantic ownership. If either side
-has only one or two triangles, treat it as ambiguous_low_sample and make no
-directional or semantic assertion from its normals. Do not call it while an
-Attempt is active.
+or semantically relevant public ranks under consideration, including at least
+one rank per distinct geometry pair. The core locates the target cell and the
+neighborhood describes adjacent Reference/candidate surface; exterior targets
+have a null neighborhood and expose only the core. These fixed local profiles
+are geometric evidence only: they cannot change target kind, replace the Spec,
+identify a Component, establish semantic ownership, or turn normals into a
+semantic label. If any profile used by the hypothesis has only one or two
+triangles, treat it as ambiguous_low_sample and make no directional or semantic
+assertion from its normals. Do not call it while an Attempt is active.
 On an error, preserve its classification and do not retry blindly. For a closed
 repair_evidence_failed response, use only its subtype to choose a permitted next
 intent; never request host diagnostics. After each published Step response with a preview_handle, emit no text before calling the only MCP

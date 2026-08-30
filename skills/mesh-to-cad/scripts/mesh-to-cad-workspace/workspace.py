@@ -1693,6 +1693,34 @@ def bind_step_target_section(
     match = next((item for item in page["items"] if item["rank"] == rank), None)
     if match is None:
         raise WorkspaceError("invalid_workspace_path", "repair target rank is unavailable")
+    step_document = _read_authority_json(
+        workspace,
+        workspace / "steps" / f"{step:06d}" / "step.json",
+        f"$.steps[{step}]",
+    )
+    measurement_relative = step_document.get("measurement_path")
+    if not isinstance(measurement_relative, str) or not measurement_relative.startswith(
+        f"voxblame/steps/{step:06d}/"
+    ):
+        _decision_facts_fail("step manifest measurement binding is malformed")
+    bound_measurement = _read_authority_json(
+        workspace,
+        workspace / measurement_relative,
+        f"$.steps[{step}].measurement",
+    )
+    active_depth = _project_residual_summary(bound_measurement)["repair_frontier"][
+        "active_depth"
+    ]
+    core_bounds = match["bounds_canonical"]
+    neighborhood_bounds = None
+    if match["kind"] != "exterior":
+        if active_depth is None:
+            _decision_facts_fail("interior repair target has no active depth")
+        width = 2.0 ** -active_depth
+        neighborhood_bounds = {
+            "min": [max(-0.5, value - width) for value in core_bounds["min"]],
+            "max": [min(0.5, value + width) for value in core_bounds["max"]],
+        }
     reference = read_canonical_reference_binding(workspace)["path"]
     candidate = workspace / "steps" / f"{step:06d}" / "candidate" / CANDIDATE_MESH_RELATIVE
     if candidate.is_symlink() or not candidate.is_file():
@@ -1701,7 +1729,8 @@ def bind_step_target_section(
         )
     return {
         "rank": rank,
-        "bounds_canonical": match["bounds_canonical"],
+        "core_bounds_canonical": core_bounds,
+        "neighborhood_bounds_canonical": neighborhood_bounds,
         "reference_path": reference,
         "candidate_path": candidate,
     }

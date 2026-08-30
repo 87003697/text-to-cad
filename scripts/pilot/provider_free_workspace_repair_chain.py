@@ -37,6 +37,7 @@ EVIDENCE_SCHEMA_V6 = "text-to-cad.provider-free-workspace-repair-chain-evidence/
 EVIDENCE_SCHEMA_V7 = "text-to-cad.provider-free-workspace-repair-chain-evidence/7"
 EVIDENCE_SCHEMA_V8 = "text-to-cad.provider-free-workspace-repair-chain-evidence/8"
 EVIDENCE_SCHEMA_V9 = "text-to-cad.provider-free-workspace-repair-chain-evidence/9"
+EVIDENCE_SCHEMA_V10 = "text-to-cad.provider-free-workspace-repair-chain-evidence/10"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
@@ -142,6 +143,14 @@ def _fixture(path: Path) -> None:
 def _source(path: Path, width: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"from build123d import Box\n\ndef gen_step():\n    return Box({width}, 0.5, 0.25)\n", encoding="utf-8")
+
+
+def _exterior_source(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "from build123d import Box\n\ndef gen_step():\n    return Box(8, 6, 3)\n",
+        encoding="utf-8",
+    )
 
 
 BAD_AUTHORING_SOURCE = """\
@@ -414,7 +423,7 @@ def _workspace_status_via_client(
         completed.returncode != 0
         or not isinstance(response, dict)
         or set(response) != {"schema", "intent", "result"}
-        or response.get("schema") != "mesh-to-cad.agent-response/4"
+        or response.get("schema") != "mesh-to-cad.agent-response/5"
         or response.get("intent") != "workspace_status"
         or not isinstance(response.get("result"), dict)
     ):
@@ -490,7 +499,7 @@ def _inspect(socket_path: Path, handle: str, expected: bytes) -> dict[str, Any]:
         raise ProviderFreeError("MCP preview text is invalid") from exc
     if parsed_text != structured:
         raise ProviderFreeError("MCP preview text does not match structured content")
-    if not isinstance(structured, dict) or set(structured) != {"schema", "intent", "result"} or structured.get("schema") != "mesh-to-cad.agent-response/4" or structured.get("intent") != "inspect_formal_preview" or not isinstance(structured.get("result"), dict) or set(structured["result"]) != {"state", "preview_handle", "permitted_next_intents"} or structured["result"].get("state") != "available" or structured["result"].get("preview_handle") != handle or not isinstance(structured["result"].get("permitted_next_intents"), list) or any(type(item) is not str or item not in MCP_PERMITTED_INTENTS for item in structured["result"]["permitted_next_intents"]):
+    if not isinstance(structured, dict) or set(structured) != {"schema", "intent", "result"} or structured.get("schema") != "mesh-to-cad.agent-response/5" or structured.get("intent") != "inspect_formal_preview" or not isinstance(structured.get("result"), dict) or set(structured["result"]) != {"state", "preview_handle", "permitted_next_intents"} or structured["result"].get("state") != "available" or structured["result"].get("preview_handle") != handle or not isinstance(structured["result"].get("permitted_next_intents"), list) or any(type(item) is not str or item not in MCP_PERMITTED_INTENTS for item in structured["result"]["permitted_next_intents"]):
         raise ProviderFreeError("MCP preview envelope is invalid")
     return {"initialize_id": initialized.get("id"), "tools_list_id": listed.get("id"), "call_id": result.get("id"), "tools": 1, "content_types": [item.get("type") for item in content], "image_bytes": len(expected), "text_present": True, "handle_bound": True}
 
@@ -517,7 +526,7 @@ def _read_target_page(socket_path: Path, step_handle: str, offset: int) -> dict[
     if (
         not isinstance(response, dict)
         or set(response) != {"schema", "intent", "result"}
-        or response.get("schema") != "mesh-to-cad.agent-response/4"
+        or response.get("schema") != "mesh-to-cad.agent-response/5"
         or response.get("intent") != "inspect_repair_targets"
         or not isinstance(response.get("result"), dict)
     ):
@@ -539,7 +548,7 @@ def _read_target_section(socket_path: Path, step_handle: str, rank: int) -> dict
     if (
         not isinstance(response, dict)
         or set(response) != {"schema", "intent", "result"}
-        or response.get("schema") != "mesh-to-cad.agent-response/4"
+        or response.get("schema") != "mesh-to-cad.agent-response/5"
         or response.get("intent") != "observe_target_section"
         or not isinstance(response.get("result"), dict)
     ):
@@ -550,19 +559,34 @@ def _read_target_section(socket_path: Path, step_handle: str, rank: int) -> dict
 def _non_tied_profile(observation: Mapping[str, Any]) -> dict[str, Any] | None:
     for side_name in ("reference", "candidate"):
         side = observation.get(side_name)
-        if not isinstance(side, dict) or side.get("triangle_count", 0) < 3:
+        if not isinstance(side, dict):
             continue
-        totals = {axis: 0.0 for axis in ("x", "y", "z")}
-        for profile in side.get("profiles", []):
-            for slab in profile.get("slabs", []):
-                fraction = slab.get("surface_area_fraction", 0.0)
-                normals = slab.get("mean_abs_normal", {})
-                for axis in totals:
-                    totals[axis] += fraction * normals.get(axis, 0.0)
-        ordered = sorted(totals.items(), key=lambda item: (-item[1], item[0]))
-        gap = ordered[0][1] - ordered[1][1]
-        if gap > 0.0:
-            return {"side": side_name, "axis": ordered[0][0], "gap": gap}
+        profiles = (
+            (("core", side.get("core")), ("neighborhood", side.get("neighborhood")))
+            if "core" in side
+            else (("core", side),)
+        )
+        for profile_name, section in profiles:
+            if not isinstance(section, dict) or section.get("triangle_count", 0) < 3:
+                continue
+            totals = {axis: 0.0 for axis in ("x", "y", "z")}
+            for profile in section.get("profiles", []):
+                for slab in profile.get("slabs", []):
+                    fraction = slab.get("surface_area_fraction", 0.0)
+                    normals = slab.get("mean_abs_normal", {})
+                    for axis in totals:
+                        totals[axis] += fraction * normals.get(axis, 0.0)
+            ordered = sorted(totals.items(), key=lambda item: (-item[1], item[0]))
+            gap = ordered[0][1] - ordered[1][1]
+            if gap > 0.0:
+                result = {
+                    "side": side_name,
+                    "axis": ordered[0][0],
+                    "gap": gap,
+                }
+                if "core" in side:
+                    result["profile"] = profile_name
+                return result
     return None
 
 
@@ -589,6 +613,215 @@ def _authority_public_target(exp_dir: Path, step: int, rank: int) -> dict[str, A
     else:
         raise ProviderFreeError("Target Section authority direction is invalid")
     return {"rank": rank, "kind": kind, "bounds_canonical": item["bounds_canonical"]}
+
+
+def _authority_target_section_v2(
+    exp_dir: Path,
+    step: int,
+    rank: int,
+    target_section_profile: Any,
+) -> dict[str, Any]:
+    target = _authority_public_target(exp_dir, step, rank)
+    core_bounds = target["bounds_canonical"]
+    neighborhood_bounds = None
+    if target["kind"] != "exterior":
+        step_document = json.loads(
+            (exp_dir / f"steps/{step:06d}/step.json").read_text(encoding="utf-8")
+        )
+        measurement_relative = step_document.get("measurement_path")
+        if not isinstance(measurement_relative, str):
+            raise ProviderFreeError("Target Section measurement binding is invalid")
+        measurement = json.loads(
+            (exp_dir / measurement_relative).read_text(encoding="utf-8")
+        )
+        errors = measurement.get("errors_by_depth")
+        if not isinstance(errors, list):
+            raise ProviderFreeError("Target Section Active Depth is unavailable")
+        active_depth = next(
+            (
+                item.get("depth")
+                for item in errors
+                if isinstance(item, dict) and item.get("surface_error_count")
+            ),
+            None,
+        )
+        if type(active_depth) is not int or active_depth <= 0:
+            raise ProviderFreeError("Target Section Active Depth is unavailable")
+        width = 2.0 ** -active_depth
+        neighborhood_bounds = {
+            "min": [max(-0.5, value - width) for value in core_bounds["min"]],
+            "max": [min(0.5, value + width) for value in core_bounds["max"]],
+        }
+    reference_path = exp_dir / "input/reference.ply"
+    candidate_path = exp_dir / f"steps/{step:06d}/candidate/candidate.glb"
+    return {
+        "schema": "mesh-to-cad.target-section-observation/2",
+        "rank": rank,
+        "reference": {
+            "core": target_section_profile(reference_path, core_bounds),
+            "neighborhood": (
+                target_section_profile(reference_path, neighborhood_bounds)
+                if neighborhood_bounds is not None
+                else None
+            ),
+        },
+        "candidate": {
+            "core": target_section_profile(candidate_path, core_bounds),
+            "neighborhood": (
+                target_section_profile(candidate_path, neighborhood_bounds)
+                if neighborhood_bounds is not None
+                else None
+            ),
+        },
+    }
+
+
+def _run_exterior_target_section_probe(
+    exp_dir: Path,
+    fixture: Path,
+    *,
+    trusted: Path,
+    published_rebuild: Path,
+    published_geometry: Path,
+    registry: Path,
+    sidecar: Any,
+    candidate_runtime: Any,
+) -> dict[str, Any]:
+    exterior_exp = exp_dir / "exterior-probe"
+    candidate_root = exp_dir.parent / f".agent-candidate-exterior-{os.getpid()}"
+    socket_dir = Path(tempfile.mkdtemp(prefix="ttc-e-", dir="/tmp"))
+    supervisor = bridge = None
+    cleanup_errors: list[str] = []
+    try:
+        runner.prepare_exp(exterior_exp)
+        runner.prepare_and_initialize_workspace(
+            exterior_exp, fixture, trusted_tools_root=trusted
+        )
+        supervisor = WorkspaceSupervisor(
+            exterior_exp,
+            bind_reference=True,
+            candidate_root=candidate_root,
+            rebuild_entrypoint=published_rebuild,
+            geometry_entrypoint=published_geometry,
+            tool_registry=registry,
+            browser_runtime_capability=sidecar.capability_dir / "runtime.json",
+            candidate_runtime=candidate_runtime,
+            trusted_tools_root=trusted,
+            trusted_product_root=trusted,
+            reconstruction_spec=False,
+            step_zero_evidence_provider=lambda req: runner.real_step_zero_evidence_provider(
+                req,
+                capability_path=sidecar.capability_dir / "runtime.json",
+                meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src",
+                meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src",
+            ),
+            repair_evidence_provider=lambda req: runner.real_repair_evidence_provider(
+                req,
+                capability_path=sidecar.capability_dir / "runtime.json",
+                meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src",
+                meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src",
+            ),
+        )
+        bridge = AgentSurfaceBridge(
+            supervisor.agent_surface(),
+            socket_dir / "surface.sock",
+            trusted_product_root=trusted,
+        )
+        bridge.start()
+        bootstrap = supervisor.agent_bootstrap_contract()
+        surface = supervisor.agent_surface()
+        workspace_handle = bootstrap["workspace_handle"]
+        plan_handle = bootstrap["plan_handle"]
+        _json(
+            candidate_root / "plan.json",
+            {
+                "schema": "mesh-to-cad.initial-plan/1",
+                "summary": "fixed exterior target integration probe",
+            },
+        )
+        attempt_response = surface.handle(
+            {
+                "schema": "mesh-to-cad.agent-intent/1",
+                "intent": "start_attempt",
+                "args": {
+                    "workspace_handle": workspace_handle,
+                    "plan_handle": plan_handle,
+                },
+            }
+        )
+        _public(attempt_response)
+        attempt = attempt_response["result"]
+        _exterior_source(candidate_root / "work/source/model.py")
+        run_response = surface.handle(
+            {
+                "schema": "mesh-to-cad.agent-intent/1",
+                "intent": "run_candidate_tool",
+                "args": {
+                    "workspace_handle": workspace_handle,
+                    "attempt_handle": attempt["attempt_handle"],
+                    "candidate_handle": attempt["candidate_handle"],
+                    "operation_handle": attempt["capability_bundle_handle"],
+                },
+            }
+        )
+        _public(run_response)
+        submit_response = surface.handle(
+            {
+                "schema": "mesh-to-cad.agent-intent/1",
+                "intent": "submit_step_zero",
+                "args": {
+                    "workspace_handle": workspace_handle,
+                    "attempt_handle": attempt["attempt_handle"],
+                    "candidate_handle": attempt["candidate_handle"],
+                },
+            }
+        )
+        _public(submit_response)
+        step = submit_response["result"]
+        step_ordinal = step["decision_facts"]["step_ordinal"]
+        offset = 0
+        exterior_page = None
+        exterior_item = None
+        while True:
+            page = _read_target_page(bridge.socket_path, step["step_handle"], offset)
+            exterior_item = next(
+                (item for item in page["items"] if item["kind"] == "exterior"),
+                None,
+            )
+            if exterior_item is not None:
+                exterior_page = page
+                break
+            next_offset = page["next_offset"]
+            if next_offset is None:
+                break
+            offset = next_offset
+        if exterior_page is None or exterior_item is None:
+            raise ProviderFreeError("fixed exterior probe published no exterior target")
+        observation = _read_target_section(
+            bridge.socket_path, step["step_handle"], exterior_item["rank"]
+        )
+        return {
+            "workspace": "exterior-probe",
+            "step_ordinal": step_ordinal,
+            "public_page": exterior_page,
+            "public_item": exterior_item,
+            "observation": observation,
+            "authority_recomputed": True,
+        }
+    finally:
+        for resource, action in ((bridge, "stop"), (supervisor, "close")):
+            if resource is None:
+                continue
+            try:
+                getattr(resource, action)()
+            except Exception as exc:
+                cleanup_errors.append(f"exterior-{action}:{type(exc).__name__}")
+        try:
+            shutil.rmtree(socket_dir)
+        except OSError as exc:
+            cleanup_errors.append(f"exterior-socket:{type(exc).__name__}")
+        if cleanup_errors:
+            raise ProviderFreeError("exterior probe cleanup failed: " + ",".join(cleanup_errors))
 
 
 def _expand_mask_prefixes(path: Path, active_depth: int) -> tuple[set[int], set[int]]:
@@ -1098,13 +1331,13 @@ def _validate_v5_artifacts(
         "module_paths", "runtime", "final", "spec_persistence",
         "spec_region_binding", "directional_projection",
     }
-    if schema in {EVIDENCE_SCHEMA_V6, EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
+    if schema in {EVIDENCE_SCHEMA_V6, EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9, EVIDENCE_SCHEMA_V10}:
         required.add("authoring_probe")
-    if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
+    if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9, EVIDENCE_SCHEMA_V10}:
         required.add("target_paging")
-    if schema in {EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
+    if schema in {EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9, EVIDENCE_SCHEMA_V10}:
         required.add("target_section_observation")
-    if schema == EVIDENCE_SCHEMA_V9:
+    if schema in {EVIDENCE_SCHEMA_V9, EVIDENCE_SCHEMA_V10}:
         required.add("client_transport")
     if (
         not isinstance(evidence, dict)
@@ -1116,7 +1349,7 @@ def _validate_v5_artifacts(
     ):
         raise ProviderFreeError("invalid v5 evidence shape")
     expected_manifest = {
-        "schema": f"text-to-cad.provider-free-artifact-manifest/{9 if schema == EVIDENCE_SCHEMA_V9 else 8 if schema == EVIDENCE_SCHEMA_V8 else 7 if schema == EVIDENCE_SCHEMA_V7 else 6 if schema == EVIDENCE_SCHEMA_V6 else 5}",
+        "schema": f"text-to-cad.provider-free-artifact-manifest/{10 if schema == EVIDENCE_SCHEMA_V10 else 9 if schema == EVIDENCE_SCHEMA_V9 else 8 if schema == EVIDENCE_SCHEMA_V8 else 7 if schema == EVIDENCE_SCHEMA_V7 else 6 if schema == EVIDENCE_SCHEMA_V6 else 5}",
         "final_status": 0,
         "identity": expected_identity(record),
         "evidence": {"path": evidence_path.name},
@@ -1161,7 +1394,7 @@ def _validate_v5_artifacts(
         or any(not isinstance(item, dict) or set(item) != {"rank", "kind", "bounds_canonical"} for item in public["items"])
         or not isinstance(selected, dict)
         or set(selected) != {"rank", "kind", "bounds_canonical", "private_kind", "private_identity_count", "mask_active_cell_count", "mask_opposite_support_count", "region_diff_identity_count"}
-        or selected.get("rank") != (8 if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9} else 0)
+        or selected.get("rank") != (8 if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9, EVIDENCE_SCHEMA_V10} else 0)
         or selected.get("kind") not in {"missing", "excess"}
         or selected.get("private_kind") != "interior"
         or selected.get("private_identity_count") != 1
@@ -1274,7 +1507,7 @@ def _validate_v5_artifacts(
         projected.append({"rank": rank, "kind": "exterior", "bounds_canonical": target["bounds_canonical"]})
     if public["items"] != projected[:8] or public["total"] != len(projected) or public["returned"] != len(projected[:8]) or public["kinds"] != sorted({item["kind"] for item in projected[:8]}):
         raise ProviderFreeError("v5 public projection is not authority-derived")
-    selected_rank = 8 if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9} else 0
+    selected_rank = 8 if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9, EVIDENCE_SCHEMA_V10} else 0
     if selected["rank"] != selected_rank or selected["kind"] != projected[selected_rank]["kind"] or selected["bounds_canonical"] != projected[selected_rank]["bounds_canonical"]:
         raise ProviderFreeError("v5 selected public tuple mismatch")
     raw = ordered[selected_rank]
@@ -1315,7 +1548,7 @@ def _validate_v5_artifacts(
     binding = evidence["spec_region_binding"]
     if not isinstance(binding, dict) or set(binding) != {"region_id", "cycles", "negative_cases", "authority_absent"} or binding.get("region_id") != "component.primary" or binding.get("cycles") != 2 or binding.get("authority_absent") is not True or [item.get("case") for item in binding.get("negative_cases", [])] != ["unknown_id", "zero_overlap"] or any(item.get("error") != "supervisor_failure" or item.get("attempt_created") is not False or item.get("public_no_leak") is not True for item in binding["negative_cases"]):
         raise ProviderFreeError("invalid v5 Spec Region binding")
-    if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
+    if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9, EVIDENCE_SCHEMA_V10}:
         paging = evidence["target_paging"]
         if (
             not isinstance(paging, dict)
@@ -1364,7 +1597,15 @@ def _validate_v5_artifacts(
             or section["observed_ranks"] != list(range(section["selected_rank"] + 1))
         ):
             raise ProviderFreeError("invalid v8 Target Section evidence")
-        public_text = json.dumps(section, sort_keys=True).lower()
+        public_text = json.dumps(
+            {
+                "step_zero": section["step_zero"],
+                "historical_reread": section["historical_reread"],
+                "repair_a": section["repair_a"],
+                "exterior": section.get("exterior", {}).get("observation"),
+            },
+            sort_keys=True,
+        ).lower()
         if any(
             token in public_text
             for token in (
@@ -1413,6 +1654,103 @@ def _validate_v5_artifacts(
             discriminator = _non_tied_profile(section["repair_a"])
         if discriminator is None or section.get("non_tied") != discriminator:
             raise ProviderFreeError("Target Section strict normal discriminator failed")
+    if schema == EVIDENCE_SCHEMA_V10:
+        section = evidence["target_section_observation"]
+        if (
+            not isinstance(section, dict)
+            or set(section) != {
+                "schema", "observed_ranks", "selected_rank", "step_zero",
+                "historical_reread", "repair_a", "exterior",
+                "authority_recomputed", "non_tied",
+            }
+            or section.get("schema")
+            != "text-to-cad.target-section-observation-evidence/2"
+            or section.get("authority_recomputed") is not True
+            or section.get("historical_reread") != section.get("step_zero")
+            or section.get("selected_rank") != section.get("step_zero", {}).get("rank")
+            or not isinstance(section.get("observed_ranks"), list)
+            or section["observed_ranks"] != list(range(section["selected_rank"] + 1))
+        ):
+            raise ProviderFreeError("invalid v10 Target Section evidence")
+        public_text = json.dumps(
+            {
+                "step_zero": section["step_zero"],
+                "historical_reread": section["historical_reread"],
+                "repair_a": section["repair_a"],
+                "exterior": section.get("exterior", {}).get("observation"),
+            },
+            sort_keys=True,
+        ).lower()
+        if any(
+            token in public_text
+            for token in (
+                "target_key", "mask", "depth8", "component", "capability",
+                "handle", '"path"', "/users/", "/home/", '"depth"',
+                '"kind"', '"bounds_canonical"',
+            )
+        ):
+            raise ProviderFreeError("v10 Target Section evidence leaked private detail")
+        if os.fspath(meshscope_src) not in sys.path:
+            sys.path.insert(0, os.fspath(meshscope_src))
+        from meshscope import target_section_profile
+
+        for name, ordinal in (
+            ("step_zero", step0),
+            ("repair_a", steps["repair_a"]["ordinal"]),
+        ):
+            observed_section = section[name]
+            expected_observation = _authority_target_section_v2(
+                exp_dir,
+                ordinal,
+                observed_section.get("rank") if isinstance(observed_section, dict) else -1,
+                target_section_profile,
+            )
+            if observed_section != expected_observation:
+                raise ProviderFreeError(
+                    "v10 Target Section response differs from committed authority"
+                )
+            if (
+                observed_section["reference"]["neighborhood"] is None
+                or observed_section["candidate"]["neighborhood"] is None
+            ):
+                raise ProviderFreeError("v10 interior Target Section omitted neighborhood")
+        discriminator = _non_tied_profile(section["step_zero"])
+        if discriminator is None:
+            discriminator = _non_tied_profile(section["repair_a"])
+        if discriminator is None or section.get("non_tied") != discriminator:
+            raise ProviderFreeError("v10 Target Section strict normal discriminator failed")
+        exterior = section["exterior"]
+        if (
+            not isinstance(exterior, dict)
+            or set(exterior) != {
+                "workspace", "step_ordinal", "public_page", "public_item",
+                "observation", "authority_recomputed",
+            }
+            or exterior.get("workspace") != "exterior-probe"
+            or exterior.get("authority_recomputed") is not True
+            or not isinstance(exterior.get("public_page"), dict)
+            or exterior.get("public_item") not in exterior["public_page"].get("items", [])
+        ):
+            raise ProviderFreeError("invalid v10 exterior Target Section evidence")
+        exterior_item = exterior["public_item"]
+        if (
+            not isinstance(exterior_item, dict)
+            or set(exterior_item) != {"rank", "kind", "bounds_canonical"}
+            or exterior_item.get("kind") != "exterior"
+        ):
+            raise ProviderFreeError("v10 exterior public rank is invalid")
+        exterior_exp = exp_dir / "exterior-probe"
+        expected_exterior = _authority_target_section_v2(
+            exterior_exp,
+            exterior["step_ordinal"],
+            exterior_item["rank"],
+            target_section_profile,
+        )
+        if exterior["observation"] != expected_exterior or any(
+            exterior["observation"][side]["neighborhood"] is not None
+            for side in ("reference", "candidate")
+        ):
+            raise ProviderFreeError("v10 exterior core/null authority mismatch")
     if schema == EVIDENCE_SCHEMA_V9:
         transport = evidence["client_transport"]
         if transport != {
@@ -1424,7 +1762,18 @@ def _validate_v5_artifacts(
             "invalid_request": False,
         }:
             raise ProviderFreeError("invalid v9 fixed-client transport evidence")
-    if schema in {EVIDENCE_SCHEMA_V6, EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
+    if schema == EVIDENCE_SCHEMA_V10:
+        transport = evidence["client_transport"]
+        if transport != {
+            "schema": "text-to-cad.client-transport-evidence/1",
+            "transport": "stdin_heredoc",
+            "exit_status": 0,
+            "response_schema": "mesh-to-cad.agent-response/5",
+            "intent": "workspace_status",
+            "invalid_request": False,
+        }:
+            raise ProviderFreeError("invalid v10 fixed-client transport evidence")
+    if schema in {EVIDENCE_SCHEMA_V6, EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9, EVIDENCE_SCHEMA_V10}:
         if authoring_python is None or environ is None:
             raise ProviderFreeError("v6 authoring observer runtime is unavailable")
         _validate_authoring_probe(
@@ -1622,6 +1971,14 @@ def validate_artifacts(
             repo_root,
             record,
             schema=EVIDENCE_SCHEMA_V9,
+            authoring_python=authoring_python,
+            environ=environ,
+        )
+    if schema == EVIDENCE_SCHEMA_V10:
+        return _validate_v5_artifacts(
+            repo_root,
+            record,
+            schema=EVIDENCE_SCHEMA_V10,
             authoring_python=authoring_python,
             environ=environ,
         )
@@ -1860,10 +2217,20 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             rebuild_entrypoint=published_rebuild,
             environ=environ,
         )
+        exterior_probe = _run_exterior_target_section_probe(
+            exp_dir,
+            fixture,
+            trusted=trusted,
+            published_rebuild=published_rebuild,
+            published_geometry=published_geometry,
+            registry=registry,
+            sidecar=sidecar,
+            candidate_runtime=candidate_lease.runtime,
+        )
         target_paging = {"schema": "text-to-cad.repair-target-paging-evidence/1", "step_ordinal": step_ordinal, "pages": target_pages, "historical_reread": historical_reread, "selected": active}
-        target_section_observation = {"schema": "text-to-cad.target-section-observation-evidence/1", "observed_ranks": observed_ranks, "selected_rank": step_zero_section["rank"], "step_zero": step_zero_section, "historical_reread": historical_section, "repair_a": repair_a_section, "authority_recomputed": True, "non_tied": non_tied}
-        evidence = {"schema": EVIDENCE_SCHEMA_V9, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence, "spec_region_binding": spec_region_binding, "directional_projection": directional_projection, "authoring_probe": authoring_probe, "target_paging": target_paging, "target_section_observation": target_section_observation, "client_transport": client_transport}
-        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/9", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record, authoring_python=authoring_python_from_evidence(repo_root, record), environ=environ); return 0
+        target_section_observation = {"schema": "text-to-cad.target-section-observation-evidence/2", "observed_ranks": observed_ranks, "selected_rank": step_zero_section["rank"], "step_zero": step_zero_section, "historical_reread": historical_section, "repair_a": repair_a_section, "exterior": exterior_probe, "authority_recomputed": True, "non_tied": non_tied}
+        evidence = {"schema": EVIDENCE_SCHEMA_V10, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence, "spec_region_binding": spec_region_binding, "directional_projection": directional_projection, "authoring_probe": authoring_probe, "target_paging": target_paging, "target_section_observation": target_section_observation, "client_transport": client_transport}
+        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/10", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record, authoring_python=authoring_python_from_evidence(repo_root, record), environ=environ); return 0
     finally:
         for resource, action in ((bridge, "stop"), (supervisor, "close"), (candidate_lease, "release"), (sidecar, "stop")):
             if resource is None: continue
