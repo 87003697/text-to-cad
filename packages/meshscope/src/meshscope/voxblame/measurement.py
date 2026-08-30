@@ -50,7 +50,6 @@ from meshscope.voxblame.voxelize import Backend, build_lattice_tree, voxelize_me
 
 MEASUREMENT_SUMMARY_SCHEMA = "voxblame.summary/1"
 _SURFACE_PROFILE = "conservative_surface_occupancy/1"
-_TARGET_PROFILE = TARGET_PARTITION_PROFILE
 _EXTERIOR_PROFILE = "signed_exterior_surface/1"
 
 
@@ -321,7 +320,7 @@ def _session_document(
         },
         "profiles": {
             "surface_occupancy": _SURFACE_PROFILE,
-            "target_partition": _TARGET_PROFILE,
+            "target_partition": TARGET_PARTITION_PROFILE,
             "exterior_surface": _EXTERIOR_PROFILE,
         },
     }
@@ -479,7 +478,7 @@ def _validate_measurement_slice(
     active_depth = active_repair_depth(measurement["errors_by_depth"])
     expected_interior = (
         measurement["errors_by_depth"][active_depth - 1]["surface_error_count"]
-        if _TARGET_PROFILE == TARGET_PARTITION_PROFILE and active_depth is not None
+        if active_depth is not None
         else depth_eight["surface_error_count"]
     )
     if sum(

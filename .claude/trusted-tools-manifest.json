@@ -452,8 +452,8 @@
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/measurement.py",
-      "sha256": "8ebb8641ae967c051b37abd1edd5e99af6c434b804756d1d5498b325a8a6ce17",
-      "size": 24425
+      "sha256": "e0bb093c1c0ec7e67f8c9f5de9bf698ae29f49658660e54f03c80238759210dc",
+      "size": 24343
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/prepare_reference.py",
