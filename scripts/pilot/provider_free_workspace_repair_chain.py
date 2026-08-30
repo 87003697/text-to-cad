@@ -36,6 +36,7 @@ EVIDENCE_SCHEMA_V5 = "text-to-cad.provider-free-workspace-repair-chain-evidence/
 EVIDENCE_SCHEMA_V6 = "text-to-cad.provider-free-workspace-repair-chain-evidence/6"
 EVIDENCE_SCHEMA_V7 = "text-to-cad.provider-free-workspace-repair-chain-evidence/7"
 EVIDENCE_SCHEMA_V8 = "text-to-cad.provider-free-workspace-repair-chain-evidence/8"
+EVIDENCE_SCHEMA_V9 = "text-to-cad.provider-free-workspace-repair-chain-evidence/9"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
@@ -374,6 +375,59 @@ def _surface_call(socket_path: Path, request: Mapping[str, Any]) -> dict[str, An
     if not isinstance(response, dict):
         raise ProviderFreeError("Agent Surface bridge returned invalid response")
     return response
+
+
+def _workspace_status_via_client(
+    client_path: Path, socket_path: Path, workspace_handle: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    request = {
+        "schema": "mesh-to-cad.agent-intent/1",
+        "intent": "workspace_status",
+        "args": {"workspace_handle": workspace_handle},
+    }
+    invocation = (
+        'python3 "$CLIENT_PATH" <<\'JSON\'\n'
+        + json.dumps(request, separators=(",", ":"))
+        + "\nJSON\n"
+    )
+    child_env = dict(os.environ)
+    child_env.update(
+        {
+            "CLIENT_PATH": os.fspath(client_path),
+            "MESH_TO_CAD_AGENT_SURFACE_SOCKET": os.fspath(socket_path),
+        }
+    )
+    completed = subprocess.run(
+        ["bash", "-c", invocation],
+        env=child_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    try:
+        frame = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ProviderFreeError("fixed client returned invalid JSON") from exc
+    _public(frame)
+    response = frame.get("response") if frame.get("ok") is True else None
+    if (
+        completed.returncode != 0
+        or not isinstance(response, dict)
+        or set(response) != {"schema", "intent", "result"}
+        or response.get("schema") != "mesh-to-cad.agent-response/4"
+        or response.get("intent") != "workspace_status"
+        or not isinstance(response.get("result"), dict)
+    ):
+        raise ProviderFreeError("fixed client workspace_status invocation failed")
+    evidence = {
+        "schema": "text-to-cad.client-transport-evidence/1",
+        "transport": "stdin_heredoc",
+        "exit_status": completed.returncode,
+        "response_schema": response["schema"],
+        "intent": response["intent"],
+        "invalid_request": False,
+    }
+    return response, evidence
 
 
 def _mcp_call(socket_path: Path, handle: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -1044,12 +1098,14 @@ def _validate_v5_artifacts(
         "module_paths", "runtime", "final", "spec_persistence",
         "spec_region_binding", "directional_projection",
     }
-    if schema in {EVIDENCE_SCHEMA_V6, EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8}:
+    if schema in {EVIDENCE_SCHEMA_V6, EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
         required.add("authoring_probe")
-    if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8}:
+    if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
         required.add("target_paging")
-    if schema == EVIDENCE_SCHEMA_V8:
+    if schema in {EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
         required.add("target_section_observation")
+    if schema == EVIDENCE_SCHEMA_V9:
+        required.add("client_transport")
     if (
         not isinstance(evidence, dict)
         or set(evidence) != required
@@ -1060,7 +1116,7 @@ def _validate_v5_artifacts(
     ):
         raise ProviderFreeError("invalid v5 evidence shape")
     expected_manifest = {
-        "schema": f"text-to-cad.provider-free-artifact-manifest/{8 if schema == EVIDENCE_SCHEMA_V8 else 7 if schema == EVIDENCE_SCHEMA_V7 else 6 if schema == EVIDENCE_SCHEMA_V6 else 5}",
+        "schema": f"text-to-cad.provider-free-artifact-manifest/{9 if schema == EVIDENCE_SCHEMA_V9 else 8 if schema == EVIDENCE_SCHEMA_V8 else 7 if schema == EVIDENCE_SCHEMA_V7 else 6 if schema == EVIDENCE_SCHEMA_V6 else 5}",
         "final_status": 0,
         "identity": expected_identity(record),
         "evidence": {"path": evidence_path.name},
@@ -1105,7 +1161,7 @@ def _validate_v5_artifacts(
         or any(not isinstance(item, dict) or set(item) != {"rank", "kind", "bounds_canonical"} for item in public["items"])
         or not isinstance(selected, dict)
         or set(selected) != {"rank", "kind", "bounds_canonical", "private_kind", "private_identity_count", "mask_active_cell_count", "mask_opposite_support_count", "region_diff_identity_count"}
-        or selected.get("rank") != (8 if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8} else 0)
+        or selected.get("rank") != (8 if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9} else 0)
         or selected.get("kind") not in {"missing", "excess"}
         or selected.get("private_kind") != "interior"
         or selected.get("private_identity_count") != 1
@@ -1218,7 +1274,7 @@ def _validate_v5_artifacts(
         projected.append({"rank": rank, "kind": "exterior", "bounds_canonical": target["bounds_canonical"]})
     if public["items"] != projected[:8] or public["total"] != len(projected) or public["returned"] != len(projected[:8]) or public["kinds"] != sorted({item["kind"] for item in projected[:8]}):
         raise ProviderFreeError("v5 public projection is not authority-derived")
-    selected_rank = 8 if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8} else 0
+    selected_rank = 8 if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9} else 0
     if selected["rank"] != selected_rank or selected["kind"] != projected[selected_rank]["kind"] or selected["bounds_canonical"] != projected[selected_rank]["bounds_canonical"]:
         raise ProviderFreeError("v5 selected public tuple mismatch")
     raw = ordered[selected_rank]
@@ -1259,7 +1315,7 @@ def _validate_v5_artifacts(
     binding = evidence["spec_region_binding"]
     if not isinstance(binding, dict) or set(binding) != {"region_id", "cycles", "negative_cases", "authority_absent"} or binding.get("region_id") != "component.primary" or binding.get("cycles") != 2 or binding.get("authority_absent") is not True or [item.get("case") for item in binding.get("negative_cases", [])] != ["unknown_id", "zero_overlap"] or any(item.get("error") != "supervisor_failure" or item.get("attempt_created") is not False or item.get("public_no_leak") is not True for item in binding["negative_cases"]):
         raise ProviderFreeError("invalid v5 Spec Region binding")
-    if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8}:
+    if schema in {EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
         paging = evidence["target_paging"]
         if (
             not isinstance(paging, dict)
@@ -1290,7 +1346,7 @@ def _validate_v5_artifacts(
             raise ProviderFreeError("v7 target pages are not authority-derived")
         if cycles["repair_a"]["selected_parent_target"] != projected[8]:
             raise ProviderFreeError("v7 second-page Repair selection mismatch")
-    if schema == EVIDENCE_SCHEMA_V8:
+    if schema in {EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
         section = evidence["target_section_observation"]
         if (
             not isinstance(section, dict)
@@ -1357,7 +1413,18 @@ def _validate_v5_artifacts(
             discriminator = _non_tied_profile(section["repair_a"])
         if discriminator is None or section.get("non_tied") != discriminator:
             raise ProviderFreeError("Target Section strict normal discriminator failed")
-    if schema in {EVIDENCE_SCHEMA_V6, EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8}:
+    if schema == EVIDENCE_SCHEMA_V9:
+        transport = evidence["client_transport"]
+        if transport != {
+            "schema": "text-to-cad.client-transport-evidence/1",
+            "transport": "stdin_heredoc",
+            "exit_status": 0,
+            "response_schema": "mesh-to-cad.agent-response/4",
+            "intent": "workspace_status",
+            "invalid_request": False,
+        }:
+            raise ProviderFreeError("invalid v9 fixed-client transport evidence")
+    if schema in {EVIDENCE_SCHEMA_V6, EVIDENCE_SCHEMA_V7, EVIDENCE_SCHEMA_V8, EVIDENCE_SCHEMA_V9}:
         if authoring_python is None or environ is None:
             raise ProviderFreeError("v6 authoring observer runtime is unavailable")
         _validate_authoring_probe(
@@ -1550,6 +1617,14 @@ def validate_artifacts(
             authoring_python=authoring_python,
             environ=environ,
         )
+    if schema == EVIDENCE_SCHEMA_V9:
+        return _validate_v5_artifacts(
+            repo_root,
+            record,
+            schema=EVIDENCE_SCHEMA_V9,
+            authoring_python=authoring_python,
+            environ=environ,
+        )
     raise ProviderFreeError("unknown evidence schema")
 
 
@@ -1588,6 +1663,13 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         bridge = AgentSurfaceBridge(supervisor.agent_surface(), socket_dir / "surface.sock", trusted_product_root=trusted)
         bridge.start(); sidecar.start(); sidecar.preflight(); sidecar.preflight_mcp()
         bootstrap = supervisor.agent_bootstrap_contract(); surface = supervisor.agent_surface(); wh = bootstrap["workspace_handle"]; ph = bootstrap["plan_handle"]
+        client_status, client_transport = _workspace_status_via_client(
+            trusted / ".claude/agent-source-projection/agent-surface/client.py",
+            bridge.socket_path,
+            wh,
+        )
+        if client_status["result"].get("workspace_identity") != wh:
+            raise ProviderFreeError("fixed client workspace identity mismatch")
         plan = candidate_root / "plan.json"; _json(plan, {"schema": "mesh-to-cad.initial-plan/1", "summary": "deterministic box reconstruction"})
         a0_response = surface.handle({"schema": "mesh-to-cad.agent-intent/1", "intent": "start_attempt", "args": {"workspace_handle": wh, "plan_handle": ph}}); _public(a0_response); a0 = a0_response["result"]
         work = candidate_root / "work"; _source(work / "source/model.py", STEP_ZERO_WIDTH)
@@ -1780,8 +1862,8 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         )
         target_paging = {"schema": "text-to-cad.repair-target-paging-evidence/1", "step_ordinal": step_ordinal, "pages": target_pages, "historical_reread": historical_reread, "selected": active}
         target_section_observation = {"schema": "text-to-cad.target-section-observation-evidence/1", "observed_ranks": observed_ranks, "selected_rank": step_zero_section["rank"], "step_zero": step_zero_section, "historical_reread": historical_section, "repair_a": repair_a_section, "authority_recomputed": True, "non_tied": non_tied}
-        evidence = {"schema": EVIDENCE_SCHEMA_V8, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence, "spec_region_binding": spec_region_binding, "directional_projection": directional_projection, "authoring_probe": authoring_probe, "target_paging": target_paging, "target_section_observation": target_section_observation}
-        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/8", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record, authoring_python=authoring_python_from_evidence(repo_root, record), environ=environ); return 0
+        evidence = {"schema": EVIDENCE_SCHEMA_V9, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence, "spec_region_binding": spec_region_binding, "directional_projection": directional_projection, "authoring_probe": authoring_probe, "target_paging": target_paging, "target_section_observation": target_section_observation, "client_transport": client_transport}
+        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/9", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record, authoring_python=authoring_python_from_evidence(repo_root, record), environ=environ); return 0
     finally:
         for resource, action in ((bridge, "stop"), (supervisor, "close"), (candidate_lease, "release"), (sidecar, "stop")):
             if resource is None: continue

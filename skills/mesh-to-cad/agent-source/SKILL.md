@@ -1,6 +1,6 @@
 ---
 name: mesh-to-cad
-description: Author STEP-first parametric candidate source and steer bounded reconstruction through a closed set of seven Agent Intents.
+description: Author STEP-first parametric candidate source and steer bounded reconstruction through the closed Agent Intents listed below.
 ---
 
 # Mesh-to-CAD Agent skill
@@ -34,7 +34,7 @@ choreography behind the intent seam.
 
 ## The intent seam
 
-The supervisor exposes exactly eight closed intents. Each intent takes
+The supervisor exposes only the closed intents listed below. Each intent takes
 opaque handles the supervisor gave you in an earlier response and returns
 a closed result plus the list of intents permitted next.
 
@@ -97,7 +97,7 @@ handle opaque. There is no `tool`, `argv`, `command`, or
 
 ## Fixed-client transport
 
-Invoke the nine JSON intents through ordinary `exec_command`, running only the
+Invoke the closed JSON intents through ordinary `exec_command`, running only the
 fixed client `python3 /agent-surface/client.py`. Feed it exactly one closed JSON
 object on stdin and read its one JSON response before issuing another intent.
 If a long-running call returns an `exec_command` session ID before its JSON
@@ -106,17 +106,20 @@ input until the client exits and returns the response. If a completed
 publication response is unavailable, call `workspace_status`; its optional
 `publication_recovery` is the exact published response. Use it without
 resubmitting W1. Do not issue another intent while that session is live.
-For example, use shell input redirection only to feed this exact request:
+Every invocation must include the request on stdin. Do not construct a request
+in a shell or JavaScript variable and then run the client without feeding that
+variable. For the first call, replace the placeholder with the opaque
+`workspace_handle` from `/candidate/bootstrap.json` and copy this complete
+invocation:
 
-```json
-{
-  "schema": "mesh-to-cad.agent-intent/1",
-  "intent": "workspace_status",
-  "args": {"workspace_handle": "<opaque handle>"}
-}
+```bash
+python3 /agent-surface/client.py <<'JSON'
+{"schema":"mesh-to-cad.agent-intent/1","intent":"workspace_status","args":{"workspace_handle":"<workspace_handle from /candidate/bootstrap.json>"}}
+JSON
 ```
 
-Use the fixed client for every JSON intent. After a published Step returns a
+Use this complete heredoc form for every JSON intent, changing only the closed
+request envelope and its documented arguments. After a published Step returns a
 `preview_handle`, emit no text before calling the only MCP tool you may use:
 code mode calls `mcp__agent_surface__inspect_formal_preview`; native Responses
 uses namespace `mcp__agent_surface` with child `inspect_formal_preview`. Never

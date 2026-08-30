@@ -197,18 +197,32 @@ EOF
 fi
 
 if [[ "$AGENT_SURFACE_MODE" == 1 ]]; then
+    FIRST_CLIENT_INVOCATION=$(cat <<'EOF'
+WORKSPACE_HANDLE_JSON="$(python3 -c 'import json; print(json.dumps(json.load(open("/candidate/bootstrap.json", encoding="utf-8"))["workspace_handle"]))')"
+python3 /agent-surface/client.py <<JSON
+{"schema":"mesh-to-cad.agent-intent/1","intent":"workspace_status","args":{"workspace_handle":${WORKSPACE_HANDLE_JSON}}}
+JSON
+EOF
+    )
     PROMPT=$(cat <<EOF
 ${PROMPT_PREAMBLE}
 
 This is an authority-hidden Agent Surface execution. Read the opaque bootstrap
 contract from the fixed candidate mount /candidate/bootstrap.json. Use only
 ordinary exec_command calls to run the fixed client
-python3 /agent-surface/client.py for these nine JSON intents:
+python3 /agent-surface/client.py for the closed JSON intents listed here:
 workspace_status, start_attempt, run_candidate_tool,
 submit_step_zero, submit_repair, inspect_repair_targets, observe_target_section,
 select_and_finalize, and observe_reference.
-For each call, provide exactly one closed JSON request envelope on stdin:
-{"schema":"mesh-to-cad.agent-intent/1","intent":"<intent>","args":{...}}.
+Begin by copying this complete invocation; it reads the real opaque handle and
+feeds the complete workspace_status request to the client on stdin:
+
+${FIRST_CLIENT_INVOCATION}
+
+Every later client invocation must likewise include exactly one closed JSON
+request envelope on stdin. Do not construct a request in a shell or JavaScript
+variable and then run the client without feeding it. Reuse the complete heredoc
+form above, changing only the documented intent and args.
 For observe_reference, args must be exactly
 {"reference_handle":"<opaque>","observation":{"method":"summary","args":{}}} or
 {"reference_handle":"<opaque>","observation":{"method":"section_profile","args":{}}}.
