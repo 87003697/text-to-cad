@@ -15,12 +15,12 @@ from typing import Any, Callable, Protocol
 
 
 REQUEST_SCHEMA = "mesh-to-cad.agent-intent/1"
-RESPONSE_SCHEMA = "mesh-to-cad.agent-response/5"
+RESPONSE_SCHEMA = "mesh-to-cad.agent-response/6"
 ERROR_SCHEMA = "mesh-to-cad.agent-error/1"
 
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
-MAX_REPAIR_STEP = 5
+MAX_REPAIR_STEP = 10
 MAX_PARENT_STEP = MAX_REPAIR_STEP - 1
 
 _HANDLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
@@ -243,12 +243,20 @@ def _bounds_result(value: Any, path: str) -> dict[str, Any]:
 def _budgets_result(value: Any, path: str) -> dict[str, int]:
     value = _closed(
         value,
-        ("remaining_cycles", "remaining_attempts", "remaining_tool_failures"),
+        (
+            "remaining_cycles",
+            "attempts_per_intended_step",
+            "tool_failures_per_intended_step",
+        ),
         path,
     )
     return {
         key: _integer(value[key], f"{path}.{key}")
-        for key in ("remaining_cycles", "remaining_attempts", "remaining_tool_failures")
+        for key in (
+            "remaining_cycles",
+            "attempts_per_intended_step",
+            "tool_failures_per_intended_step",
+        )
     }
 
 

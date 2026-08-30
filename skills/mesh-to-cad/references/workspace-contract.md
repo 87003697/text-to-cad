@@ -292,7 +292,7 @@ same explicit earlier parent. This allows later cycles to branch from history.
 
 ## Bounds and recovery
 
-The Workspace permits five successful Repair Cycles. Each intended step permits
+The Workspace permits ten successful Repair Cycles. Each intended step permits
 three Attempts, at most two of which may end as actual tool failures. Failed
 Attempts consume no cycle. A successfully published geometric no-op consumes
 one cycle.

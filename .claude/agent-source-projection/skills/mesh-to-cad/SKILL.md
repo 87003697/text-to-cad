@@ -154,7 +154,7 @@ Every successful client response is one JSON object with the response envelope:
 {
   "ok": true,
   "response": {
-    "schema": "mesh-to-cad.agent-response/5",
+    "schema": "mesh-to-cad.agent-response/6",
     "intent": "<same intent>",
     "result": { "...": "..." }
   }
@@ -166,6 +166,10 @@ Each intent has its own closed result shape:
 - `workspace_status`: `state`, `workspace_identity`, `budgets`,
   `permitted_next_intents`, and, only for an unreceived current published
   response, `publication_recovery` with that published response's closed shape.
+  `budgets` is exactly `{remaining_cycles, attempts_per_intended_step,
+  tool_failures_per_intended_step}`. `remaining_cycles` is the only global
+  Repair capacity. The other two values are static limits for each intended
+  step, not remaining balances or a shared pool.
 - `start_attempt`: `state`, `attempt_handle`, `candidate_handle`,
   `capability_bundle_handle`, `permitted_next_intents`.
 - `run_candidate_tool`: `state`, `candidate_handle`, `result_handle`,
@@ -579,7 +583,9 @@ Rules for using decision facts:
 
 ## Bounded loop shape
 
-The bounded loop the supervisor enforces is:
+The bounded loop permits at most ten Repair Cycles after Step 0. Each intended
+step permits at most three Attempts and two tool failures. Step 0 is not a
+Repair Cycle. The supervisor enforces this shape:
 
 1. `workspace_status` to read the initial permitted intents and budgets.
 2. Author an initial plan at `/candidate/plan.json` and pass it to
@@ -610,7 +616,9 @@ The bounded loop the supervisor enforces is:
    comparison. If a child is not better than that result, start the next
    Attempt from the best result's opaque parent handle. Stop when residuals
    establish acceptance, when no further coherent repair is plausible, or
-   when the supervisor reports `budget_exhausted`. If `submit_repair` returns
+   when no permitted repair remains. Decide whether an action is currently
+   callable only from `permitted_next_intents`; never infer admission from a
+   local per-intended-step limit. If `submit_repair` returns
    `repair_evidence_failed`, use its closed subtype only to choose the next
    permitted action; do not infer or request host-side diagnostics.
    For every Repair Attempt, rebind the plan to the chosen parent's current
@@ -626,17 +634,13 @@ issue only an intent it lists. Any other intent returns
 
 ## Stop reasons and honesty
 
-Never claim acceptance, provenance, or verification you did not
-observe in an intent response. When you stop early, name one honest
-stop reason drawn from what the responses tell you:
-
-- `acceptance_reached` — the last submitted step's residuals meet the
-  acceptance signal in the supervisor result.
-- `no_feasible_repair` — you cannot form a coherent falsifiable
-  hypothesis from current evidence.
-- `budget_exhausted` — the surface returned this classification.
-- `unsupported_domain` — the domain cannot be represented honestly as
-  STEP-first parametric CAD.
+Never claim acceptance, provenance, or verification you did not observe in an
+intent response. Use the stop reasons in
+`references/agent-selection-claim.md`. Use `cycle_limit` only when the latest
+`workspace_status` reports `remaining_cycles: 0`. A per-intended-step Attempt
+or tool-failure limit is never evidence that the global Repair Cycle budget is
+exhausted. If cycles remain but no coherent repair is available, use
+`no_feasible_strategy`.
 
 Report exactly what handles the supervisor returned. Do not invent
 identifiers.

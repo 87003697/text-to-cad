@@ -40,7 +40,9 @@ you:
 - `acceptance_satisfied` — the Selected Step's `decision_facts.accepted`
   was `true`. If the Selected Step is unaccepted, do **not** use this
   value; the supervisor rejects it as an identity conflict.
-- `cycle_limit` — the repair budget was exhausted before acceptance.
+- `cycle_limit` — the latest `workspace_status` reported
+  `budgets.remaining_cycles` as zero before acceptance. Per-intended-step
+  Attempt or tool-failure limits do not justify this reason.
 - `no_feasible_strategy` — no coherent falsifiable repair hypothesis
   remained under the evidence you had.
 - `representation_limit` — the target cannot be represented honestly as

@@ -38,12 +38,14 @@ EVIDENCE_SCHEMA_V7 = "text-to-cad.provider-free-workspace-repair-chain-evidence/
 EVIDENCE_SCHEMA_V8 = "text-to-cad.provider-free-workspace-repair-chain-evidence/8"
 EVIDENCE_SCHEMA_V9 = "text-to-cad.provider-free-workspace-repair-chain-evidence/9"
 EVIDENCE_SCHEMA_V10 = "text-to-cad.provider-free-workspace-repair-chain-evidence/10"
+EVIDENCE_SCHEMA_V11 = "text-to-cad.provider-free-workspace-repair-chain-evidence/11"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
 STEP_ZERO_WIDTH = 2 / 3
 REPAIR_A_WIDTH = 9 / 10
 REPAIR_B_WIDTH = 1 / 8
+REPAIR_C_WIDTH = 3 / 4
 SPEC_FINAL_BYTES = b'{"revision":"updated","semantic_regions":[]}\n'
 MCP_PERMITTED_INTENTS = frozenset({
     "workspace_status", "start_attempt", "run_candidate_tool", "submit_step_zero",
@@ -106,10 +108,14 @@ def artifact_paths(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Pa
     return exp, exp / "provider-free-evidence.json", exp / "artifact_manifest.json"
 
 
-def authoring_python_from_evidence(repo_root: Path, record: Mapping[str, Any]) -> Path:
+def authoring_python_from_evidence(
+    repo_root: Path, record: Mapping[str, Any]
+) -> Path | None:
     _, evidence_path, _ = artifact_paths(repo_root, record)
     try:
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        if evidence.get("schema") == EVIDENCE_SCHEMA_V11:
+            return None
         identity = evidence["authoring_probe"]["runtime"]["identity"]
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise ProviderFreeError("v6 authoring runtime identity is unavailable") from exc
@@ -138,6 +144,13 @@ def _fixture(path: Path) -> None:
         mesh = mesh.subdivide()
     path.parent.mkdir(parents=True, exist_ok=True)
     mesh.export(path, file_type="ply")
+
+
+def _cycle_fixture(path: Path) -> None:
+    import trimesh
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    trimesh.creation.box(extents=(12.0, 6.0, 3.0)).export(path, file_type="ply")
 
 
 def _source(path: Path, width: float) -> None:
@@ -423,7 +436,7 @@ def _workspace_status_via_client(
         completed.returncode != 0
         or not isinstance(response, dict)
         or set(response) != {"schema", "intent", "result"}
-        or response.get("schema") != "mesh-to-cad.agent-response/5"
+        or response.get("schema") != "mesh-to-cad.agent-response/6"
         or response.get("intent") != "workspace_status"
         or not isinstance(response.get("result"), dict)
     ):
@@ -437,6 +450,248 @@ def _workspace_status_via_client(
         "invalid_request": False,
     }
     return response, evidence
+
+
+def _run_cycle_exhaustion_probe(
+    probe_exp: Path,
+    fixture: Path,
+    *,
+    trusted: Path,
+    published_rebuild: Path,
+    published_geometry: Path,
+    registry: Path,
+    sidecar: runner.BrowserRuntimeJob,
+    candidate_runtime: Path,
+) -> dict[str, Any]:
+    """Publish ten real repairs and read the exhausted state through the socket."""
+
+    probe_exp.mkdir(parents=True)
+    runner.prepare_exp(probe_exp)
+    runner.prepare_and_initialize_workspace(
+        probe_exp, fixture, trusted_tools_root=trusted
+    )
+    candidate_root = probe_exp.parent / f".agent-candidate-cycle-limit-{os.getpid()}"
+    socket_root = Path(tempfile.mkdtemp(prefix="ttc-cycle-", dir="/tmp"))
+    supervisor: WorkspaceSupervisor | None = None
+    bridge: AgentSurfaceBridge | None = None
+    try:
+        supervisor = WorkspaceSupervisor(
+            probe_exp,
+            bind_reference=True,
+            candidate_root=candidate_root,
+            rebuild_entrypoint=published_rebuild,
+            geometry_entrypoint=published_geometry,
+            tool_registry=registry,
+            browser_runtime_capability=sidecar.capability_dir / "runtime.json",
+            candidate_runtime=candidate_runtime,
+            trusted_tools_root=trusted,
+            trusted_product_root=trusted,
+            reconstruction_spec=False,
+            step_zero_evidence_provider=lambda req: runner.real_step_zero_evidence_provider(
+                req,
+                capability_path=sidecar.capability_dir / "runtime.json",
+                meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src",
+                meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src",
+            ),
+            repair_evidence_provider=lambda req: runner.real_repair_evidence_provider(
+                req,
+                capability_path=sidecar.capability_dir / "runtime.json",
+                meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src",
+                meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src",
+            ),
+        )
+        bridge = AgentSurfaceBridge(
+            supervisor.agent_surface(),
+            socket_root / "surface.sock",
+            trusted_product_root=trusted,
+        )
+        bridge.start()
+        bootstrap = supervisor.agent_bootstrap_contract()
+        workspace_handle = bootstrap["workspace_handle"]
+        plan_handle = bootstrap["plan_handle"]
+        plan_path = candidate_root / "plan.json"
+        _json(
+            plan_path,
+            {
+                "schema": "mesh-to-cad.initial-plan/1",
+                "summary": "ten-cycle authority exhaustion probe",
+            },
+        )
+        start = _surface_call(
+            bridge.socket_path,
+            {
+                "schema": "mesh-to-cad.agent-intent/1",
+                "intent": "start_attempt",
+                "args": {
+                    "workspace_handle": workspace_handle,
+                    "plan_handle": plan_handle,
+                },
+            },
+        )["response"]["result"]
+        if start.get("state") != "started":
+            raise ProviderFreeError("cycle exhaustion Step 0 Attempt did not start")
+        _source(candidate_root / "work/source/model.py", REPAIR_B_WIDTH)
+        step_zero_run = _surface_call(
+            bridge.socket_path,
+            {
+                "schema": "mesh-to-cad.agent-intent/1",
+                "intent": "run_candidate_tool",
+                "args": {
+                    "workspace_handle": workspace_handle,
+                    "attempt_handle": start["attempt_handle"],
+                    "candidate_handle": start["candidate_handle"],
+                    "operation_handle": start["capability_bundle_handle"],
+                },
+            },
+        )["response"]["result"]
+        if step_zero_run.get("state") != "completed":
+            raise ProviderFreeError("cycle exhaustion Step 0 build failed")
+        current = _surface_call(
+            bridge.socket_path,
+            {
+                "schema": "mesh-to-cad.agent-intent/1",
+                "intent": "submit_step_zero",
+                "args": {
+                    "workspace_handle": workspace_handle,
+                    "attempt_handle": start["attempt_handle"],
+                    "candidate_handle": start["candidate_handle"],
+                },
+            },
+        )["response"]["result"]
+        if current.get("state") != "published":
+            raise ProviderFreeError("cycle exhaustion Step 0 did not publish")
+        if current["decision_facts"].get("accepted") is not False:
+            raise ProviderFreeError("cycle exhaustion Step 0 unexpectedly accepted")
+        for cycle in range(1, 11):
+            targets = current["decision_facts"].get("repair_targets", {}).get(
+                "items", []
+            )
+            if not targets:
+                raise ProviderFreeError("cycle exhaustion parent has no target")
+            target = targets[0]
+            parent_step = current["decision_facts"]["step_ordinal"]
+            _json(
+                plan_path,
+                {
+                    "schema": "voxblame.repair-batch/1",
+                    "from_step": parent_step,
+                    "selected_targets": [target],
+                    "planned_edits": [
+                        {
+                            "edit_key": f"cycle-{cycle}",
+                            "target_ranks": [target["rank"]],
+                            "spec_region_id": "component.primary",
+                            "description": "publish one bounded real repair",
+                        }
+                    ],
+                    "rationale": "exercise the ten-cycle Workspace authority",
+                    "preview_observation": "the parent remains unaccepted",
+                },
+            )
+            attempt = _surface_call(
+                bridge.socket_path,
+                {
+                    "schema": "mesh-to-cad.agent-intent/1",
+                    "intent": "start_attempt",
+                    "args": {
+                        "workspace_handle": workspace_handle,
+                        "plan_handle": plan_handle,
+                        "parent_step_handle": current["step_handle"],
+                    },
+                },
+            )["response"]["result"]
+            if attempt.get("state") != "started":
+                raise ProviderFreeError(
+                    f"cycle exhaustion Repair {cycle} Attempt did not start"
+                )
+            _source(
+                candidate_root / "work/source/model.py",
+                REPAIR_B_WIDTH + cycle / 100,
+            )
+            cycle_run = _surface_call(
+                bridge.socket_path,
+                {
+                    "schema": "mesh-to-cad.agent-intent/1",
+                    "intent": "run_candidate_tool",
+                    "args": {
+                        "workspace_handle": workspace_handle,
+                        "attempt_handle": attempt["attempt_handle"],
+                        "candidate_handle": attempt["candidate_handle"],
+                        "operation_handle": attempt["capability_bundle_handle"],
+                    },
+                },
+            )["response"]["result"]
+            if cycle_run.get("state") != "completed":
+                raise ProviderFreeError(
+                    f"cycle exhaustion Repair {cycle} build failed"
+                )
+            _json(
+                candidate_root / "work/assessment.json",
+                {
+                    "schema": "mesh-to-cad.assessment/1",
+                    "from_step": parent_step,
+                    "to_step": cycle,
+                    "preview_observation": "the bounded candidate remains unaccepted",
+                    "summary": "Published one real cycle for authority exhaustion.",
+                },
+            )
+            current = _surface_call(
+                bridge.socket_path,
+                {
+                    "schema": "mesh-to-cad.agent-intent/1",
+                    "intent": "submit_repair",
+                    "args": {
+                        "workspace_handle": workspace_handle,
+                        "attempt_handle": attempt["attempt_handle"],
+                        "candidate_handle": attempt["candidate_handle"],
+                    },
+                },
+            )["response"]["result"]
+            if current.get("state") != "published":
+                raise ProviderFreeError(
+                    "cycle exhaustion Repair "
+                    f"{cycle} failed: {current.get('classification')}:"
+                    f"{current.get('subtype')}"
+                )
+            if current["decision_facts"].get("accepted") is not False:
+                raise ProviderFreeError("cycle exhaustion repair unexpectedly accepted")
+        status, transport = _workspace_status_via_client(
+            trusted / ".claude/agent-source-projection/agent-surface/client.py",
+            bridge.socket_path,
+            workspace_handle,
+        )
+        authority = supervisor.workspace_api.workspace_status(probe_exp)
+        result = status["result"]
+        if (
+            result.get("budgets")
+            != {
+                "remaining_cycles": 0,
+                "attempts_per_intended_step": 3,
+                "tool_failures_per_intended_step": 2,
+            }
+            or "start_attempt" in result.get("permitted_next_intents", [])
+            or authority.get("completed_cycles") != 10
+            or authority.get("remaining_cycles") != 0
+        ):
+            raise ProviderFreeError("ten-cycle authority did not exhaust")
+        return {
+            "completed_cycles": authority["completed_cycles"],
+            "remaining_cycles": result["budgets"]["remaining_cycles"],
+            "attempts_per_intended_step": result["budgets"][
+                "attempts_per_intended_step"
+            ],
+            "tool_failures_per_intended_step": result["budgets"][
+                "tool_failures_per_intended_step"
+            ],
+            "start_attempt_permitted": False,
+            "transport": transport,
+        }
+    finally:
+        if bridge is not None:
+            bridge.stop()
+        if supervisor is not None:
+            supervisor.close()
+        shutil.rmtree(socket_root)
 
 
 def _mcp_call(socket_path: Path, handle: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -499,7 +754,7 @@ def _inspect(socket_path: Path, handle: str, expected: bytes) -> dict[str, Any]:
         raise ProviderFreeError("MCP preview text is invalid") from exc
     if parsed_text != structured:
         raise ProviderFreeError("MCP preview text does not match structured content")
-    if not isinstance(structured, dict) or set(structured) != {"schema", "intent", "result"} or structured.get("schema") != "mesh-to-cad.agent-response/5" or structured.get("intent") != "inspect_formal_preview" or not isinstance(structured.get("result"), dict) or set(structured["result"]) != {"state", "preview_handle", "permitted_next_intents"} or structured["result"].get("state") != "available" or structured["result"].get("preview_handle") != handle or not isinstance(structured["result"].get("permitted_next_intents"), list) or any(type(item) is not str or item not in MCP_PERMITTED_INTENTS for item in structured["result"]["permitted_next_intents"]):
+    if not isinstance(structured, dict) or set(structured) != {"schema", "intent", "result"} or structured.get("schema") != "mesh-to-cad.agent-response/6" or structured.get("intent") != "inspect_formal_preview" or not isinstance(structured.get("result"), dict) or set(structured["result"]) != {"state", "preview_handle", "permitted_next_intents"} or structured["result"].get("state") != "available" or structured["result"].get("preview_handle") != handle or not isinstance(structured["result"].get("permitted_next_intents"), list) or any(type(item) is not str or item not in MCP_PERMITTED_INTENTS for item in structured["result"]["permitted_next_intents"]):
         raise ProviderFreeError("MCP preview envelope is invalid")
     return {"initialize_id": initialized.get("id"), "tools_list_id": listed.get("id"), "call_id": result.get("id"), "tools": 1, "content_types": [item.get("type") for item in content], "image_bytes": len(expected), "text_present": True, "handle_bound": True}
 
@@ -526,7 +781,7 @@ def _read_target_page(socket_path: Path, step_handle: str, offset: int) -> dict[
     if (
         not isinstance(response, dict)
         or set(response) != {"schema", "intent", "result"}
-        or response.get("schema") != "mesh-to-cad.agent-response/5"
+        or response.get("schema") != "mesh-to-cad.agent-response/6"
         or response.get("intent") != "inspect_repair_targets"
         or not isinstance(response.get("result"), dict)
     ):
@@ -548,7 +803,7 @@ def _read_target_section(socket_path: Path, step_handle: str, rank: int) -> dict
     if (
         not isinstance(response, dict)
         or set(response) != {"schema", "intent", "result"}
-        or response.get("schema") != "mesh-to-cad.agent-response/5"
+        or response.get("schema") != "mesh-to-cad.agent-response/6"
         or response.get("intent") != "observe_target_section"
         or not isinstance(response.get("result"), dict)
     ):
@@ -1982,7 +2237,191 @@ def validate_artifacts(
             authoring_python=authoring_python,
             environ=environ,
         )
+    if schema == EVIDENCE_SCHEMA_V11:
+        return _validate_v11_artifacts(repo_root, record)
     raise ProviderFreeError("unknown evidence schema")
+
+
+def _validate_v11_artifacts(
+    repo_root: Path, record: Mapping[str, Any]
+) -> tuple[Path, Path]:
+    exp_dir, evidence_path, artifact_manifest_path = artifact_paths(repo_root, record)
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        manifest = json.loads(artifact_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProviderFreeError("v11 evidence missing or invalid") from exc
+    if evidence_path.stat().st_size > MAX_EVIDENCE_BYTES:
+        raise ProviderFreeError("v11 evidence is too large")
+    if (
+        not isinstance(evidence, dict)
+        or set(evidence)
+        != {
+            "schema",
+            "identity",
+            "scenario",
+            "gate_passed",
+            "budget_truth",
+            "selection",
+            "steps",
+            "graph",
+            "failed_attempts",
+            "workspace_validation",
+            "module_paths",
+            "final",
+            "client_transport",
+        }
+        or evidence.get("schema") != EVIDENCE_SCHEMA_V11
+        or evidence.get("identity") != expected_identity(record)
+        or evidence.get("scenario") != SCENARIO
+        or evidence.get("gate_passed") is not True
+        or evidence.get("workspace_validation") is not True
+    ):
+        raise ProviderFreeError("invalid v11 evidence shape")
+    if manifest != {
+        "schema": "text-to-cad.provider-free-artifact-manifest/11",
+        "final_status": 0,
+        "identity": expected_identity(record),
+        "evidence": {"path": evidence_path.name},
+    }:
+        raise ProviderFreeError("invalid v11 manifest")
+    budget = evidence["budget_truth"]
+    expected_limits = {
+        "remaining_cycles": 7,
+        "attempts_per_intended_step": 3,
+        "tool_failures_per_intended_step": 2,
+    }
+    after_c = budget.get("after_repair_c", {})
+    local = budget.get("local_exhaustion", {})
+    cycle = budget.get("cycle_exhaustion", {})
+    if (
+        set(budget)
+        != {
+            "schema",
+            "bootstrap_attempt_budget_absent",
+            "after_repair_c",
+            "local_exhaustion",
+            "cycle_exhaustion",
+        }
+        or budget.get("schema") != "text-to-cad.budget-truth-evidence/1"
+        or budget.get("bootstrap_attempt_budget_absent") is not True
+        or after_c.get("completed_cycles") != 3
+        or after_c.get("total_attempts") != 4
+        or after_c.get("budgets") != expected_limits
+        or after_c.get("start_attempt_permitted") is not True
+        or local.get("intended_step") != 4
+        or local.get("attempts") != 3
+        or len(local.get("failure_subtypes", [])) != 3
+        or local.get("budgets") != expected_limits
+        or local.get("start_attempt_permitted") is not False
+        or local.get("select_and_finalize_permitted") is not True
+        or cycle.get("completed_cycles") != 10
+        or cycle.get("remaining_cycles") != 0
+        or cycle.get("attempts_per_intended_step") != 3
+        or cycle.get("tool_failures_per_intended_step") != 2
+        or cycle.get("start_attempt_permitted") is not False
+    ):
+        raise ProviderFreeError("invalid v11 budget truth evidence")
+    for transport in (
+        evidence["client_transport"],
+        after_c.get("transport"),
+        local.get("transport"),
+        cycle.get("transport"),
+    ):
+        if transport != {
+            "schema": "text-to-cad.client-transport-evidence/1",
+            "transport": "stdin_heredoc",
+            "exit_status": 0,
+            "response_schema": "mesh-to-cad.agent-response/6",
+            "intent": "workspace_status",
+            "invalid_request": False,
+        }:
+            raise ProviderFreeError("v11 transport did not use response/6")
+    steps = evidence["steps"]
+    if set(steps) != {"step_zero", "repair_a", "repair_b", "repair_c"}:
+        raise ProviderFreeError("invalid v11 published steps")
+    for name, expected_ordinal in (
+        ("step_zero", 0),
+        ("repair_a", 1),
+        ("repair_b", 2),
+        ("repair_c", 3),
+    ):
+        item = steps[name]
+        manifest_path = exp_dir / f"steps/{expected_ordinal:06d}/step.json"
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (
+            item.get("ordinal") != expected_ordinal
+            or item.get("accepted") is not False
+            or document.get("step") != expected_ordinal
+            or document.get("parent_step") != item.get("parent")
+        ):
+            raise ProviderFreeError("v11 step authority mismatch")
+    if evidence.get("graph") != {"source": "step_parentage", "heads": [3]}:
+        raise ProviderFreeError("v11 graph mismatch")
+    failed = evidence["failed_attempts"]
+    failed_documents = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted((exp_dir / "attempts").glob("*/attempt.json"))
+        if json.loads(path.read_text(encoding="utf-8")).get("intended_step") == 4
+    ]
+    if (
+        failed != {
+            "intended_step": 4,
+            "count": 3,
+            "subtypes": local["failure_subtypes"],
+        }
+        or len(failed_documents) != 3
+        or any(document.get("result") != "strategy_changed" for document in failed_documents)
+    ):
+        raise ProviderFreeError("v11 local Attempts are not authority-backed")
+    selection = evidence["selection"]
+    final = evidence["final"]
+    final_manifest = json.loads((exp_dir / "final/manifest.json").read_text(encoding="utf-8"))
+    final_selection = json.loads((exp_dir / "final/selection.json").read_text(encoding="utf-8"))
+    if (
+        selection.get("stop_reason") != "no_feasible_strategy"
+        or final.get("stop_reason") != "no_feasible_strategy"
+        or final_selection.get("stop_reason") != "no_feasible_strategy"
+        or final.get("identity_bound") is not True
+        or final_manifest.get("selected_step") != selection.get("selected_step")
+    ):
+        raise ProviderFreeError("v11 final stop reason or identity is invalid")
+    exhaustion_root = exp_dir / "run/cycle-exhaustion-workspace"
+    exhaustion_index = json.loads(
+        (exhaustion_root / "step_index.json").read_text(encoding="utf-8")
+    )
+    if (
+        exhaustion_index.get("budget", {}).get("completed_cycles") != 10
+        or exhaustion_index.get("budget", {}).get("remaining_cycles") != 0
+        or len(list((exhaustion_root / "cycles").glob("*/cycle.json"))) != 10
+        or not runner._workspace_status_available(exhaustion_root)
+    ):
+        raise ProviderFreeError("v11 cycle exhaustion fixture is not authority-backed")
+    modules = evidence["module_paths"]
+    if (
+        modules.get("product_root") != "skills"
+        or any(
+            not isinstance(modules.get(key), str)
+            or not modules[key].startswith("skills/")
+            for key in ("workspace", "core", "handler", "mcp", "rebuild", "geometry")
+        )
+    ):
+        raise ProviderFreeError("v11 module provenance is invalid")
+    public_text = json.dumps(evidence, sort_keys=True).lower()
+    if any(
+        token in public_text
+        for token in (
+            "target_key",
+            "mask_sha256",
+            "depth8",
+            "capability_path",
+            '"path": "/',
+            "/users/",
+            "/home/",
+        )
+    ):
+        raise ProviderFreeError("v11 evidence leaked private detail")
+    return evidence_path, artifact_manifest_path
 
 
 def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, environ: Mapping[str, str]) -> int:
@@ -1998,12 +2437,14 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
     (repo_root / "tmp").mkdir(exist_ok=True)
     fixture_root = Path(tempfile.mkdtemp(prefix="workspace-repair-chain-", dir=repo_root / "tmp"))
     fixture = fixture_root / "repair-chain.ply"
+    cycle_fixture = fixture_root / "cycle-exhaustion.ply"
     cleanup_errors: list[str] = []
     sidecar = candidate_lease = supervisor = bridge = None
     socket_dir: Path | None = None
     try:
         runner.prepare_exp(exp_dir)
         _fixture(fixture)
+        _cycle_fixture(cycle_fixture)
         trusted = receipt.publish_tree
         published_rebuild = trusted / "skills/cad/scripts/canonical-build/__main__.py"
         published_geometry = trusted / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
@@ -2137,15 +2578,82 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         if historical_section != step_zero_section or non_tied is None:
             raise ProviderFreeError("Target Section observation discriminator failed")
         repair_b, png_b, mcp_b = submit_child(repair_a, repair_a["decision_facts"]["step_ordinal"], max(published_ordinals) + 1, REPAIR_B_WIDTH, "shrink-primary", "shrink below the reference as a regression", "Repair B shrinks the candidate and underfits the reference.", "Applied the bounded shrink regression hypothesis.")
+        published_ordinals.append(repair_b["decision_facts"]["step_ordinal"])
+        repair_c, png_c, mcp_c = submit_child(repair_b, repair_b["decision_facts"]["step_ordinal"], max(published_ordinals) + 1, REPAIR_C_WIDTH, "recover-primary", "recover the primary width after the regression", "Repair C restores part of the regressed width.", "Applied the bounded recovery hypothesis.")
+        published_ordinals.append(repair_c["decision_facts"]["step_ordinal"])
         if repair_a["decision_facts"].get("accepted") is not False or repair_b["decision_facts"].get("accepted") is not False:
             raise ProviderFreeError("repair discriminator must remain unaccepted")
         frontier_a = _frontier(repair_a["decision_facts"])
         frontier_b = _frontier(repair_b["decision_facts"])
-        best_label = "repair_a" if _frontier_order(frontier_a) > _frontier_order(step_frontier) else "step_zero"
-        best = repair_a if best_label == "repair_a" else s0
-        best_frontier = frontier_a if best_label == "repair_a" else step_frontier
+        frontier_c = _frontier(repair_c["decision_facts"])
+        candidates = {
+            "step_zero": (s0, step_frontier),
+            "repair_a": (repair_a, frontier_a),
+            "repair_c": (repair_c, frontier_c),
+        }
+        best_label, (best, best_frontier) = max(
+            candidates.items(), key=lambda item: _frontier_order(item[1][1])
+        )
         if not _frontier_order(best_frontier) > _frontier_order(frontier_b):
             raise ProviderFreeError(f"Active Depth repair ordering discriminator failed: S0={step_frontier},A={frontier_a},B={frontier_b}")
+        status_after_c, status_after_c_transport = _workspace_status_via_client(
+            trusted / ".claude/agent-source-projection/agent-surface/client.py",
+            bridge.socket_path,
+            wh,
+        )
+        after_c_result = status_after_c["result"]
+        expected_public_budgets = {
+            "remaining_cycles": 7,
+            "attempts_per_intended_step": 3,
+            "tool_failures_per_intended_step": 2,
+        }
+        authority_after_c = supervisor.workspace_api.workspace_status(exp_dir)
+        if (
+            after_c_result.get("budgets") != expected_public_budgets
+            or "start_attempt" not in after_c_result.get("permitted_next_intents", [])
+            or authority_after_c.get("completed_cycles") != 3
+            or authority_after_c.get("total_attempts") != 4
+        ):
+            raise ProviderFreeError("Repair C budget truth discriminator failed")
+
+        failed_step = repair_c["decision_facts"]["step_ordinal"] + 1
+        failed_attempt_results: list[str] = []
+        failed_parent_targets = repair_c["decision_facts"].get("repair_targets", {}).get("items", [])
+        if not failed_parent_targets:
+            raise ProviderFreeError("Repair C has no target for local budget probe")
+        failed_target = failed_parent_targets[0]
+        for failure_index in range(3):
+            _spec(spec_path, "component.primary", failed_target["bounds_canonical"])
+            _json(plan, {"schema": "voxblame.repair-batch/1", "from_step": repair_c["decision_facts"]["step_ordinal"], "selected_targets": [failed_target], "planned_edits": [{"edit_key": f"failed-repair-{failure_index + 1}", "target_ranks": [failed_target["rank"]], "spec_region_id": "component.primary", "description": "exercise the real repair evidence failure path"}], "rationale": "exercise the bounded local Attempt allowance", "preview_observation": "the parent remains unaccepted"})
+            failed_start = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "start_attempt", "args": {"workspace_handle": wh, "plan_handle": ph, "parent_step_handle": repair_c["step_handle"]}})
+            _public(failed_start)
+            failed_attempt = failed_start["response"]["result"]
+            _source(candidate_root / "work/source/model.py", REPAIR_C_WIDTH)
+            failed_run = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "run_candidate_tool", "args": {"workspace_handle": wh, "attempt_handle": failed_attempt["attempt_handle"], "candidate_handle": failed_attempt["candidate_handle"], "operation_handle": failed_attempt["capability_bundle_handle"]}})
+            _public(failed_run)
+            assessment_path = candidate_root / "work/assessment.json"
+            assessment_path.unlink(missing_ok=True)
+            failed_submit = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "submit_repair", "args": {"workspace_handle": wh, "attempt_handle": failed_attempt["attempt_handle"], "candidate_handle": failed_attempt["candidate_handle"]}})
+            _public(failed_submit)
+            failed_result = failed_submit.get("response", {}).get("result", {})
+            if failed_result.get("state") != "failed" or failed_result.get("classification") != "repair_evidence_failed":
+                raise ProviderFreeError("real repair evidence failure did not retire the Attempt")
+            failed_attempt_results.append(failed_result["subtype"])
+        exhausted_status, exhausted_transport = _workspace_status_via_client(
+            trusted / ".claude/agent-source-projection/agent-surface/client.py",
+            bridge.socket_path,
+            wh,
+        )
+        exhausted_result = exhausted_status["result"]
+        exhausted_authority = supervisor.workspace_api.workspace_status(exp_dir)
+        if (
+            exhausted_result.get("budgets") != expected_public_budgets
+            or "start_attempt" in exhausted_result.get("permitted_next_intents", [])
+            or "select_and_finalize" not in exhausted_result.get("permitted_next_intents", [])
+            or exhausted_authority.get("current_step_attempts") != 3
+            or exhausted_authority.get("next_intended_step") != failed_step
+        ):
+            raise ProviderFreeError("local intended-step budget exhaustion discriminator failed")
         provenance = supervisor.module_provenance(bridge)
         try:
             workspace_module = provenance["workspace"].resolve()
@@ -2156,16 +2664,31 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             raise ProviderFreeError("installed workspace module retains current-head selection rejection")
         a_ordinal = repair_a["decision_facts"]["step_ordinal"]
         b_ordinal = repair_b["decision_facts"]["step_ordinal"]
+        c_ordinal = repair_c["decision_facts"]["step_ordinal"]
         a_preview_path = exp_dir / f"steps/{a_ordinal:06d}/preview/preview.png"
-        best_png = png_a if best_label == "repair_a" else step_preview_bytes
+        best_png = {
+            "step_zero": step_preview_bytes,
+            "repair_a": png_a,
+            "repair_c": png_c,
+        }[best_label]
         mcp_selected_reinspect = _inspect(bridge.socket_path, best["preview_handle"], best_png)
         selection_path = candidate_root / "selection.json"
         notes_path = candidate_root / "notes.md"
-        best_name = "Step 0" if best_label == "step_zero" else "Repair A"
-        _json(selection_path, {"schema": "mesh-to-cad.agent-selection-claim/1", "preview_observation": f"{best_name} is the strongest measured result; Repair B regressed the observed geometry.", "stop_reason": "no_feasible_strategy", "conflict": False, "conflict_details": None, "rationale": f"{best_name} is the strongest returned result after comparing the bounded repair trajectory."})
-        notes_path.write_text(f"## Input\n\nThe input was measured against the committed reference fixture.\n## Modeling Intent\n\nThe candidate models the bounded box reconstruction intent.\n## Preserved Structural Features\n\nThe measured candidate preserves the primary solid structure.\n## Omitted Surface Details\n\nResidual surface details remain outside this deterministic gate.\n## Repair Trajectory\n\n{best_name} is the best-so-far result; Repair B was worse.\n## Final Selection\n\nThe best-so-far result is {best_name}, selected from its returned opaque handle.\n## Verification\n\nFinal verification is bound to {best_name} and its committed measurement.\n", encoding="utf-8")
+        best_name = {"step_zero": "Step 0", "repair_a": "Repair A", "repair_c": "Repair C"}[best_label]
+        _json(selection_path, {"schema": "mesh-to-cad.agent-selection-claim/1", "preview_observation": f"{best_name} is the strongest measured result after the bounded recovery trajectory.", "stop_reason": "no_feasible_strategy", "conflict": False, "conflict_details": None, "rationale": f"{best_name} is the strongest returned result after comparing the bounded repair trajectory; the next intended step exhausted its local Attempts while seven Repair Cycles remained."})
+        notes_path.write_text(f"## Input\n\nThe input was measured against the committed reference fixture.\n## Modeling Intent\n\nThe candidate models the bounded box reconstruction intent.\n## Preserved Structural Features\n\nThe measured candidate preserves the primary solid structure.\n## Omitted Surface Details\n\nResidual surface details remain outside this deterministic gate.\n## Repair Trajectory\n\n{best_name} is the best-so-far result; the next intended step exhausted its local Attempts while global Repair capacity remained.\n## Final Selection\n\nThe best-so-far result is {best_name}, selected from its returned opaque handle.\n## Verification\n\nFinal verification is bound to {best_name} and its committed measurement.\n", encoding="utf-8")
         final_response = surface.handle({"schema": "mesh-to-cad.agent-intent/1", "intent": "select_and_finalize", "args": {"workspace_handle": wh, "step_handle": best["step_handle"], "selection_handle": bootstrap["selection_handle"], "notes_handle": bootstrap["notes_handle"]}}); _public(final_response)
         if final_response["result"].get("state") != "finalized": raise ProviderFreeError("historical selection did not finalize")
+        cycle_exhaustion = _run_cycle_exhaustion_probe(
+            exp_dir / "run/cycle-exhaustion-workspace",
+            cycle_fixture,
+            trusted=trusted,
+            published_rebuild=published_rebuild,
+            published_geometry=published_geometry,
+            registry=registry,
+            sidecar=sidecar,
+            candidate_runtime=candidate_lease.runtime,
+        )
         final_root = exp_dir / "final"
         final_manifest = json.loads((final_root / "manifest.json").read_text(encoding="utf-8"))
         graph = supervisor.workspace_api._core._build_graph(exp_dir, validate_steps=True)
@@ -2176,7 +2699,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             )
             parent_target = committed_plan["selected_targets"][0]
             return {"ordinal": ordinal, "from_step": result["decision_facts"]["parent_step_ordinal"], "to_step": ordinal, "selected_parent_target": {key: parent_target[key] for key in ("rank", "kind", "bounds_canonical")}, "artifacts": {name: f"cycles/{ordinal:06d}/{name}.json" for name in ("plan", "assessment", "diff", "cycle", "attempt")}}
-        cycles = {"repair_a": cycle_record(repair_a, s0), "repair_b": cycle_record(repair_b, repair_a)}
+        cycles = {"repair_a": cycle_record(repair_a, s0), "repair_b": cycle_record(repair_b, repair_a), "repair_c": cycle_record(repair_c, repair_b)}
         def published_relative(path: Path) -> str: return path.resolve().relative_to(trusted.resolve()).as_posix()
         runner_interpreter = Path(sys.executable)
         try:
@@ -2229,8 +2752,79 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         )
         target_paging = {"schema": "text-to-cad.repair-target-paging-evidence/1", "step_ordinal": step_ordinal, "pages": target_pages, "historical_reread": historical_reread, "selected": active}
         target_section_observation = {"schema": "text-to-cad.target-section-observation-evidence/2", "observed_ranks": observed_ranks, "selected_rank": step_zero_section["rank"], "step_zero": step_zero_section, "historical_reread": historical_section, "repair_a": repair_a_section, "exterior": exterior_probe, "authority_recomputed": True, "non_tied": non_tied}
-        evidence = {"schema": EVIDENCE_SCHEMA_V10, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence, "spec_region_binding": spec_region_binding, "directional_projection": directional_projection, "authoring_probe": authoring_probe, "target_paging": target_paging, "target_section_observation": target_section_observation, "client_transport": client_transport}
-        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/10", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record, authoring_python=authoring_python_from_evidence(repo_root, record), environ=environ); return 0
+        budget_truth = {
+            "schema": "text-to-cad.budget-truth-evidence/1",
+            "bootstrap_attempt_budget_absent": "attempt_budget" not in bootstrap,
+            "after_repair_c": {
+                "completed_cycles": authority_after_c["completed_cycles"],
+                "total_attempts": authority_after_c["total_attempts"],
+                "budgets": after_c_result["budgets"],
+                "start_attempt_permitted": "start_attempt" in after_c_result["permitted_next_intents"],
+                "transport": status_after_c_transport,
+            },
+            "local_exhaustion": {
+                "intended_step": failed_step,
+                "attempts": exhausted_authority["current_step_attempts"],
+                "failure_subtypes": failed_attempt_results,
+                "budgets": exhausted_result["budgets"],
+                "start_attempt_permitted": "start_attempt" in exhausted_result["permitted_next_intents"],
+                "select_and_finalize_permitted": "select_and_finalize" in exhausted_result["permitted_next_intents"],
+                "transport": exhausted_transport,
+            },
+            "cycle_exhaustion": cycle_exhaustion,
+        }
+        evidence = {
+            "schema": EVIDENCE_SCHEMA_V11,
+            "identity": identity,
+            "scenario": SCENARIO,
+            "gate_passed": True,
+            "budget_truth": budget_truth,
+            "selection": {
+                "considered": ["step_zero", "repair_a", "repair_b", "repair_c"],
+                "selected": best_label,
+                "selected_step": best["decision_facts"]["step_ordinal"],
+                "repair_c_is_head": c_ordinal,
+                "stop_reason": "no_feasible_strategy",
+            },
+            "steps": {
+                "step_zero": {"ordinal": step_ordinal, "parent": None, "accepted": False},
+                "repair_a": {"ordinal": a_ordinal, "parent": step_ordinal, "accepted": False},
+                "repair_b": {"ordinal": b_ordinal, "parent": a_ordinal, "accepted": False},
+                "repair_c": {"ordinal": c_ordinal, "parent": b_ordinal, "accepted": False},
+            },
+            "graph": {"source": "step_parentage", "heads": [c_ordinal]},
+            "failed_attempts": {
+                "intended_step": failed_step,
+                "count": len(failed_attempt_results),
+                "subtypes": failed_attempt_results,
+            },
+            "workspace_validation": runner._workspace_status_available(exp_dir),
+            "module_paths": {
+                "product_root": "skills",
+                **{key: published_relative(value) for key, value in provenance.items()},
+                "rebuild": published_relative(published_rebuild),
+                "geometry": published_relative(published_geometry),
+            },
+            "final": {
+                "manifest": "final/manifest.json",
+                "selected_step": final_manifest.get("selected_step"),
+                "stop_reason": "no_feasible_strategy",
+                "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"],
+            },
+            "client_transport": client_transport,
+        }
+        _json(evidence_path, evidence)
+        _json(
+            artifact_manifest_path,
+            {
+                "schema": "text-to-cad.provider-free-artifact-manifest/11",
+                "final_status": 0,
+                "identity": identity,
+                "evidence": {"path": evidence_path.name},
+            },
+        )
+        validate_artifacts(repo_root, record, environ=environ)
+        return 0
     finally:
         for resource, action in ((bridge, "stop"), (supervisor, "close"), (candidate_lease, "release"), (sidecar, "stop")):
             if resource is None: continue

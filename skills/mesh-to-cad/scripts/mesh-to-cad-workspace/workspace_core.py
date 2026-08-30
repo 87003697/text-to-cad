@@ -41,7 +41,7 @@ COMMAND_SCHEMA = "mesh-to-cad.command/1"
 INITIAL_PLAN_SCHEMA = "mesh-to-cad.initial-plan/1"
 COORDINATE_CONTRACT = "trellis2_canonical/1"
 MAX_DEPTH = 8
-MAX_REPAIR_CYCLES = 5
+MAX_REPAIR_CYCLES = 10
 MAX_ATTEMPTS_PER_STEP = 3
 MAX_TOOL_FAILURES_PER_STEP = 2
 MAX_COMMANDS_PER_ATTEMPT = 8
@@ -1634,7 +1634,7 @@ def publish_cycle(
             f"next successful Repair Cycle must be {expected_cycle}",
         )
     if intended_step > MAX_REPAIR_CYCLES:
-        _fail("budget_violation", "Workspace has exhausted five Repair Cycles")
+        _fail("budget_violation", "Workspace has exhausted ten Repair Cycles")
     from_step = active["from_step"]
     if from_step is None:
         _fail("parent_mismatch", "Repair Cycle requires a source Measured Step")
@@ -3711,7 +3711,7 @@ def _build_graph(workspace: Path, *, validate_steps: bool) -> dict[str, Any]:
     if steps and steps[0]["step"] != 0:
         _fail("parent_mismatch", "Workspace graph is missing Measured Step 0")
     if len(steps) > MAX_REPAIR_CYCLES + 1:
-        _fail("budget_violation", "Workspace exceeds the five-cycle budget")
+        _fail("budget_violation", "Workspace exceeds the ten-cycle budget")
     cycles: list[dict[str, Any]] = []
     cycles_root = workspace / "cycles"
     if cycles_root.exists():
@@ -3757,7 +3757,7 @@ def _build_graph(workspace: Path, *, validate_steps: bool) -> dict[str, Any]:
             "every nonzero Measured Step requires its matching Repair Cycle",
         )
     if len(cycles) > MAX_REPAIR_CYCLES:
-        _fail("budget_violation", "Workspace exceeds five Repair Cycles")
+        _fail("budget_violation", "Workspace exceeds ten Repair Cycles")
     accepted_steps = [item["step"] for item in steps if item["accepted"]]
     failed_attempts: list[dict[str, Any]] = []
     attempts_root = workspace / "attempts"

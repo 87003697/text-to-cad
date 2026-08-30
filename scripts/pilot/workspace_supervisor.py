@@ -74,9 +74,10 @@ except ModuleNotFoundError as _exc:  # pragma: no cover - direct-execution fallb
 MAX_OPERATION_OUTPUT_BYTES = 64 * 1024
 MAX_OPERATION_TIMEOUT_SECONDS = 1800
 MAX_CANDIDATE_FILE_BYTES = 512 * 1024 * 1024
-MAX_ATTEMPT_STEP = 5
+MAX_ATTEMPT_STEP = 10
 MAX_ATTEMPTS_PER_STEP = 3
-MAX_CYCLES = 5
+MAX_TOOL_FAILURES_PER_STEP = 2
+MAX_CYCLES = 10
 MAX_CANONICAL_BUILD_TIMEOUT_SECONDS = 1800
 MAX_CANONICAL_BUILD_ATTEMPTS = 8
 CANDIDATE_PUBLISHED_MEASUREMENT_NAME = "candidate.glb"
@@ -1031,24 +1032,11 @@ class WorkspaceSupervisor:
         """Publish only run-level capabilities before the first Attempt exists."""
 
         plan = self.register_plan(self.candidate_root / "plan.json")
-        attempts_per_step = int(
-            getattr(self.workspace_api, "MAX_ATTEMPTS_PER_STEP", MAX_ATTEMPTS_PER_STEP)
-        )
-        repair_cycles = int(
-            getattr(self.workspace_api, "MAX_REPAIR_CYCLES", MAX_CYCLES)
-        )
-        if attempts_per_step <= 0 or repair_cycles < 0:
-            raise SupervisorError("workspace_contract_violation")
         return {
             "schema": "mesh-to-cad.agent-bootstrap/1",
             "workspace_handle": self.workspace_handle,
             "reference_handle": self.reference_handle,
             "plan_handle": plan,
-            "attempt_budget": {
-                "attempts_per_step": attempts_per_step,
-                "repair_steps": repair_cycles,
-                "maximum_attempts": attempts_per_step * (repair_cycles + 1),
-            },
             "selection_handle": self.register_selection(
                 self.candidate_root / "selection.json"
             ),
@@ -1329,15 +1317,20 @@ class WorkspaceSupervisor:
                 else workspace_state
             )
         )
-        remaining_attempts = status.get("remaining_attempts", MAX_ATTEMPTS_PER_STEP)
+        remaining_cycles = status.get("remaining_cycles")
+        remaining_attempts = status.get("remaining_attempts")
         remaining_tool_failures = status.get("remaining_tool_failures")
-        if remaining_tool_failures is None:
-            remaining_tool_failures = max(0, 2 - failures)
         if (
-            type(remaining_attempts) is not int
+            type(remaining_cycles) is not int
+            or remaining_cycles < 0
+            or remaining_cycles > MAX_CYCLES
+            or remaining_cycles != MAX_CYCLES - completed
+            or type(remaining_attempts) is not int
             or remaining_attempts < 0
+            or remaining_attempts > MAX_ATTEMPTS_PER_STEP
             or type(remaining_tool_failures) is not int
             or remaining_tool_failures < 0
+            or remaining_tool_failures > MAX_TOOL_FAILURES_PER_STEP
         ):
             raise SupervisorError("workspace_contract_violation")
         if workspace_state == "terminal":
@@ -1360,7 +1353,13 @@ class WorkspaceSupervisor:
             and workspace_state != "terminal"
         ):
             next_intents.append("observe_reference")
-            next_intents.append("start_attempt")
+            attempt_available = (
+                remaining_attempts > 0
+                and remaining_tool_failures > 0
+                and (workspace_state == "ready" or remaining_cycles > 0)
+            )
+            if attempt_available:
+                next_intents.append("start_attempt")
             if workspace_state == "preterminal":
                 next_intents.append("inspect_repair_targets")
                 next_intents.append("observe_target_section")
@@ -1369,9 +1368,9 @@ class WorkspaceSupervisor:
             "state": state,
             "workspace_identity": workspace_handle,
             "budgets": {
-                "remaining_cycles": max(0, MAX_CYCLES - completed),
-                "remaining_attempts": remaining_attempts,
-                "remaining_tool_failures": remaining_tool_failures,
+                "remaining_cycles": remaining_cycles,
+                "attempts_per_intended_step": MAX_ATTEMPTS_PER_STEP,
+                "tool_failures_per_intended_step": MAX_TOOL_FAILURES_PER_STEP,
             },
             "permitted_next_intents": next_intents,
         }
@@ -1440,6 +1439,10 @@ class WorkspaceSupervisor:
         workspace = self._workspace(workspace_handle)
         plan = self.registry.resolve(plan_handle, "plan")
         _safe_relative(self.candidate_root, plan)
+        if "start_attempt" not in self.workspace_status(workspace_handle)[
+            "permitted_next_intents"
+        ]:
+            raise SupervisorError("state_conflict")
         if parent_step_handle is None:
             from_step: int | None = None
         else:

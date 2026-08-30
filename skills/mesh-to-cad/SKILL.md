@@ -12,7 +12,7 @@ Reconstruct a raw mesh through one auditable protocol:
 ```text
 Canonical Reference
   → Measured Step 0
-  → zero to five Repair Cycles
+  → zero to ten Repair Cycles
   → Selected Step
   → isolated rebuild and Observable Geometry verification
   → Final Delivery
@@ -198,7 +198,7 @@ An Attempt that cannot publish a Measured Step must be frozen with
 measured geometric no-op consumes one. Use Repair Cycles for falsifiable,
 geometry-directed edits; make recipe and provenance corrections before a
 Measured Step or while preparing finalization. The Workspace permits at most
-five successful Repair Cycles, three Attempts per intended step, and two actual
+ten successful Repair Cycles, three Attempts per intended step, and two actual
 tool failures per intended step.
 
 Stop repair immediately when the objective facts establish acceptance. The
