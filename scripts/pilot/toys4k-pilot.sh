@@ -290,8 +290,14 @@ WORKLOAD+=(
 
 PILOT_EXIT=0
 if [[ "$AGENT_SURFACE_MODE" == 1 ]]; then
+    if [[ "$RECONSTRUCTION_SPEC" == 1 ]]; then
+        RUNNER_RECONSTRUCTION_SPEC_FLAG="--reconstruction-spec"
+    else
+        RUNNER_RECONSTRUCTION_SPEC_FLAG="--no-reconstruction-spec"
+    fi
     PYTHONPATH="$REPO_ROOT/packages/browser_runtime/src${PYTHONPATH:+:$PYTHONPATH}" \
-    "$PYTHON_BIN" "$SCRIPT_DIR/runner.py" run --agent-surface --input "$PLY" "$EXP_DIR" -- \
+    "$PYTHON_BIN" "$SCRIPT_DIR/runner.py" run --agent-surface \
+        "$RUNNER_RECONSTRUCTION_SPEC_FLAG" --input "$PLY" "$EXP_DIR" -- \
         "${WORKLOAD[@]}" < /dev/null > /dev/null \
         2> "${EXP_DIR}/run/stderr.log" || PILOT_EXIT=$?
 else

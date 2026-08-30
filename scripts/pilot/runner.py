@@ -174,6 +174,7 @@ SANDBOX_CODEX_HOME = SANDBOX_HOME / ".codex"
 SANDBOX_PUBLISH_TREE = PurePosixPath(plugin_deployment.SANDBOX_MARKETPLACE_SOURCE)
 JOB_CODEX_HOME_REL = "run/.codex-home"
 JOB_PUBLISH_TREE_REL = "run/.plugin-publish-tree"
+RECONSTRUCTION_SPEC_RELATIVE = Path("run/reconstruction-spec.json")
 ARTIFACT_CONTRACT_STATUS = 4
 MANIFEST_EXCLUDED_ROOTS = {".git"}
 MANIFEST_EXCLUDED_PREFIXES = {JOB_CODEX_HOME_REL, JOB_PUBLISH_TREE_REL}
@@ -1813,6 +1814,28 @@ def write_agent_bootstrap(candidate_dir: Path, contract: Mapping[str, object]) -
     return target
 
 
+def persist_agent_reconstruction_spec(
+    exp_dir: Path,
+    candidate_root: Path,
+    *,
+    enabled: bool,
+    workload_status: int,
+) -> int:
+    """Persist the Agent's mutable Spec before its candidate root is removed."""
+
+    if not enabled:
+        return workload_status
+    try:
+        shutil.copyfile(
+            candidate_root / "reconstruction-spec.json",
+            exp_dir / RECONSTRUCTION_SPEC_RELATIVE,
+        )
+    except OSError as exc:
+        print(f"pilot-runner: cannot persist Reconstruction Spec: {exc}", file=sys.stderr)
+        return workload_status or 1
+    return workload_status
+
+
 def write_artifact_manifest(
     exp_dir: Path,
     workload_status: int,
@@ -1999,6 +2022,7 @@ def run_pilot(
     environ: Mapping[str, str],
     agent_candidate_dir: Path | None = None,
     agent_surface: bool = False,
+    reconstruction_spec: bool = False,
 ) -> int:
     """Prepare, supervise, and finalize one complete pilot transaction."""
 
@@ -2173,6 +2197,13 @@ def run_pilot(
                     lifetime_confirmed = False
                     if not relay.cancelled:
                         workload_status = workload_status or 1
+            if agent_supervisor is not None:
+                workload_status = persist_agent_reconstruction_spec(
+                    exp_dir,
+                    agent_supervisor.candidate_root,
+                    enabled=reconstruction_spec,
+                    workload_status=workload_status,
+                )
             if agent_supervisor is not None and lifetime_confirmed:
                 try:
                     agent_supervisor.close()
@@ -2240,6 +2271,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="host the opaque Agent Surface over the candidate-only bridge",
     )
+    reconstruction_spec = run_parser.add_mutually_exclusive_group()
+    reconstruction_spec.add_argument(
+        "--reconstruction-spec",
+        action="store_true",
+        help="persist the Agent's mutable Reconstruction Spec",
+    )
+    reconstruction_spec.add_argument(
+        "--no-reconstruction-spec",
+        dest="reconstruction_spec",
+        action="store_false",
+    )
+    run_parser.set_defaults(reconstruction_spec=False)
     run_parser.add_argument("exp_dir", type=Path)
     run_parser.add_argument("command", nargs=argparse.REMAINDER)
     clean_parser = subparsers.add_parser("clean")
@@ -2269,6 +2312,7 @@ def main(argv: list[str] | None = None) -> int:
             dict(os.environ),
             args.agent_candidate_dir,
             args.agent_surface,
+            args.reconstruction_spec,
         )
     except PilotError as exc:
         print(f"pilot-runner: {exc}", file=sys.stderr)

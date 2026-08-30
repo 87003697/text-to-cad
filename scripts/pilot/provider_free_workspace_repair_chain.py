@@ -28,12 +28,15 @@ from scripts.pilot.workspace_supervisor import SupervisorError, WorkspaceSupervi
 SCENARIO = "workspace-repair-chain"
 EVIDENCE_SCHEMA_V1 = "text-to-cad.provider-free-workspace-repair-chain-evidence/1"
 EVIDENCE_SCHEMA_V2 = "text-to-cad.provider-free-workspace-repair-chain-evidence/2"
+EVIDENCE_SCHEMA_V3 = "text-to-cad.provider-free-workspace-repair-chain-evidence/3"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
 STEP_ZERO_WIDTH = 2 / 3
 REPAIR_A_WIDTH = 9 / 10
 REPAIR_B_WIDTH = 1 / 8
+SPEC_INITIAL_BYTES = b'{"revision":"initial"}\n'
+SPEC_FINAL_BYTES = b'{"revision":"updated","semantic_regions":[]}\n'
 MCP_PERMITTED_INTENTS = frozenset({
     "workspace_status", "start_attempt", "run_candidate_tool", "submit_step_zero",
     "submit_repair", "inspect_formal_preview", "select_and_finalize", "observe_reference",
@@ -290,7 +293,12 @@ def _validate_v1_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[
     return evidence_path, artifact_manifest_path
 
 
-def _validate_v2_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Path]:
+def _validate_v2_artifacts(
+    repo_root: Path,
+    record: Mapping[str, Any],
+    *,
+    schema: str = EVIDENCE_SCHEMA_V2,
+) -> tuple[Path, Path]:
     exp_dir, evidence_path, artifact_manifest_path = artifact_paths(repo_root, record)
     try:
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
@@ -298,7 +306,9 @@ def _validate_v2_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[
     except (OSError, json.JSONDecodeError) as exc:
         raise ProviderFreeError("v2 evidence missing or invalid") from exc
     required = {"schema", "identity", "scenario", "gate_passed", "selection", "steps", "graph", "previews", "mcp", "workspace_validation", "module_paths", "runtime", "final", "cycles"}
-    if not isinstance(evidence, dict) or set(evidence) != required or evidence.get("schema") != EVIDENCE_SCHEMA_V2 or evidence.get("identity") != expected_identity(record) or evidence.get("scenario") != SCENARIO or evidence.get("gate_passed") is not True:
+    if schema == EVIDENCE_SCHEMA_V3:
+        required.add("spec_persistence")
+    if not isinstance(evidence, dict) or set(evidence) != required or evidence.get("schema") != schema or evidence.get("identity") != expected_identity(record) or evidence.get("scenario") != SCENARIO or evidence.get("gate_passed") is not True:
         raise ProviderFreeError("invalid v2 evidence shape")
     selection = evidence["selection"]
     if not isinstance(selection, dict) or set(selection) != {"considered", "selected", "selected_step", "repair_b_is_head"} or selection.get("selected") not in {"step_zero", "repair_a"} or selection.get("considered") != ["step_zero", "repair_a", "repair_b"]:
@@ -420,13 +430,29 @@ def _validate_v2_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[
         raise ProviderFreeError("final source is not selected-step source")
     if (exp_dir / "final/measurement.json").read_bytes() != (exp_dir / f"steps/{selection['selected_step']:06d}/measurement.json").read_bytes():
         raise ProviderFreeError("final measurement is not selected-step measurement")
-    expected_manifest = {"schema": "text-to-cad.provider-free-artifact-manifest/2", "final_status": 0, "identity": expected_identity(record), "evidence": {"path": evidence_path.name}}
+    expected_manifest = {"schema": f"text-to-cad.provider-free-artifact-manifest/{3 if schema == EVIDENCE_SCHEMA_V3 else 2}", "final_status": 0, "identity": expected_identity(record), "evidence": {"path": evidence_path.name}}
     if not isinstance(manifest, dict) or manifest != expected_manifest:
         raise ProviderFreeError("invalid v2 manifest")
     if final.get("identity_bound") is not True:
         raise ProviderFreeError("final identity binding was not derived")
     if final_manifest.get("selected_step") != selection["selected_step"] or final_manifest.get("selected_step") == steps["repair_b"]["ordinal"]:
         raise ProviderFreeError("final manifest selected wrong step")
+    if schema == EVIDENCE_SCHEMA_V3:
+        spec = evidence["spec_persistence"]
+        expected_spec = {
+            "seam": "runner.persist_agent_reconstruction_spec",
+            "path": runner.RECONSTRUCTION_SPEC_RELATIVE.as_posix(),
+            "enabled_status": 0,
+            "updated_bytes": len(SPEC_FINAL_BYTES),
+            "disabled_absent": True,
+            "workspace_authority_absent": True,
+            "missing_status": 1,
+            "prior_failure_status": 17,
+        }
+        if spec != expected_spec:
+            raise ProviderFreeError("invalid Reconstruction Spec persistence evidence")
+        if (exp_dir / runner.RECONSTRUCTION_SPEC_RELATIVE).read_bytes() != SPEC_FINAL_BYTES:
+            raise ProviderFreeError("persisted Reconstruction Spec bytes changed")
     return evidence_path, artifact_manifest_path
 
 
@@ -440,6 +466,8 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
         return _validate_v1_artifacts(repo_root, record)
     if schema == EVIDENCE_SCHEMA_V2:
         return _validate_v2_artifacts(repo_root, record)
+    if schema == EVIDENCE_SCHEMA_V3:
+        return _validate_v2_artifacts(repo_root, record, schema=EVIDENCE_SCHEMA_V3)
     raise ProviderFreeError("unknown evidence schema")
 
 
@@ -565,8 +593,29 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             raise ProviderFreeError("runner interpreter is outside repository runtime") from exc
         if runner_interpreter_relative != ".venv/bin/python":
             raise ProviderFreeError("provider-free runner did not use repository venv")
-        evidence = {"schema": EVIDENCE_SCHEMA_V2, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}}
-        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/2", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record); return 0
+        spec_path = candidate_root / "reconstruction-spec.json"
+        spec_path.write_bytes(SPEC_INITIAL_BYTES)
+        spec_path.write_bytes(SPEC_FINAL_BYTES)
+        enabled_status = runner.persist_agent_reconstruction_spec(exp_dir, candidate_root, enabled=True, workload_status=0)
+        disabled_exp = fixture_root / "disabled-exp"
+        disabled_candidate = fixture_root / "disabled-candidate"
+        (disabled_exp / "run").mkdir(parents=True)
+        disabled_candidate.mkdir()
+        (disabled_candidate / "reconstruction-spec.json").write_bytes(SPEC_FINAL_BYTES)
+        runner.persist_agent_reconstruction_spec(disabled_exp, disabled_candidate, enabled=False, workload_status=0)
+        missing_candidate = fixture_root / "missing-candidate"
+        missing_candidate.mkdir()
+        missing_status = runner.persist_agent_reconstruction_spec(exp_dir, missing_candidate, enabled=True, workload_status=0)
+        prior_failure_status = runner.persist_agent_reconstruction_spec(exp_dir, missing_candidate, enabled=True, workload_status=17)
+        authority_roots = (exp_dir / "setup", exp_dir / "steps", exp_dir / "cycles", exp_dir / "final")
+        workspace_authority_absent = not any(
+            path.name == "reconstruction-spec.json"
+            for root in authority_roots
+            for path in root.rglob("*")
+        )
+        spec_persistence = {"seam": "runner.persist_agent_reconstruction_spec", "path": runner.RECONSTRUCTION_SPEC_RELATIVE.as_posix(), "enabled_status": enabled_status, "updated_bytes": len((exp_dir / runner.RECONSTRUCTION_SPEC_RELATIVE).read_bytes()), "disabled_absent": not (disabled_exp / runner.RECONSTRUCTION_SPEC_RELATIVE).exists(), "workspace_authority_absent": workspace_authority_absent, "missing_status": missing_status, "prior_failure_status": prior_failure_status}
+        evidence = {"schema": EVIDENCE_SCHEMA_V3, "identity": identity, "scenario": SCENARIO, "gate_passed": True, "selection": {"considered": ["step_zero", "repair_a", "repair_b"], "selected": best_label, "selected_step": best["decision_facts"]["step_ordinal"], "repair_b_is_head": b_ordinal}, "steps": {"step_zero": {"step_handle": s0["step_handle"], "ordinal": step_ordinal, "parent": None, "cycle": None, "accepted": False, "frontier": step_frontier, "target_count": len(items), "manifest": f"steps/{step_ordinal:06d}/step.json"}, "repair_a": {"step_handle": repair_a["step_handle"], "ordinal": a_ordinal, "parent": repair_a["decision_facts"]["parent_step_ordinal"], "cycle": a_ordinal, "accepted": False, "frontier": frontier_a, "target_count": len(repair_a["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{a_ordinal:06d}/step.json"}, "repair_b": {"step_handle": repair_b["step_handle"], "ordinal": b_ordinal, "parent": repair_b["decision_facts"]["parent_step_ordinal"], "cycle": b_ordinal, "accepted": False, "frontier": frontier_b, "target_count": len(repair_b["decision_facts"].get("repair_targets", {}).get("items", [])), "manifest": f"steps/{b_ordinal:06d}/step.json"}}, "graph": {"source": "step_parentage", "heads": [b_ordinal]}, "cycles": cycles, "previews": {"step_zero": {"path": step_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(step_preview_bytes)}, "repair_a": {"path": a_preview_path.relative_to(exp_dir).as_posix(), "bytes": len(png_a)}, "repair_b": {"path": (exp_dir / f"steps/{b_ordinal:06d}/preview/preview.png").relative_to(exp_dir).as_posix(), "bytes": len(png_b)}, "selected_reinspect": {"path": (step_preview_path if best_label == "step_zero" else a_preview_path).relative_to(exp_dir).as_posix(), "bytes": len(best_png)}}, "mcp": {"step_zero": mcp0, "repair_a": mcp_a, "repair_b": mcp_b, "selected_reinspect": mcp_selected_reinspect}, "workspace_validation": runner._workspace_status_available(exp_dir), "module_paths": {"product_root": "skills", **{key: published_relative(value) for key, value in provenance.items()}, "rebuild": published_relative(published_rebuild), "geometry": published_relative(published_geometry)}, "runtime": {"interpreter": runner_interpreter_relative, "registry": {"schema": registry_document["schema"], "rebuild_id": registry_document["rebuild"]["id"], "geometry_id": registry_document["geometry"]["id"], "authority": "installed_publish_tree", "provenance": "receipt.publish_tree"}}, "final": {"manifest": "final/manifest.json", "selected_step": final_manifest.get("selected_step"), "source": "final/source/source/model.py", "measurement": "final/measurement.json", "preview": "final/preview.json", "verification": "final/verification.json", "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"]}, "spec_persistence": spec_persistence}
+        _json(evidence_path, evidence); _json(artifact_manifest_path, {"schema": "text-to-cad.provider-free-artifact-manifest/3", "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}); validate_artifacts(repo_root, record); return 0
     finally:
         for resource, action in ((bridge, "stop"), (supervisor, "close"), (candidate_lease, "release"), (sidecar, "stop")):
             if resource is None: continue
