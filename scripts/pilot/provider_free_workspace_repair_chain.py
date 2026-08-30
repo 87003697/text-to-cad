@@ -36,7 +36,6 @@ MAX_MANIFEST_BYTES = 8 * 1024
 STEP_ZERO_WIDTH = 2 / 3
 REPAIR_A_WIDTH = 9 / 10
 REPAIR_B_WIDTH = 1 / 8
-SPEC_INITIAL_BYTES = b'{"revision":"initial"}\n'
 SPEC_FINAL_BYTES = b'{"revision":"updated","semantic_regions":[]}\n'
 MCP_PERMITTED_INTENTS = frozenset({
     "workspace_status", "start_attempt", "run_candidate_tool", "submit_step_zero",
