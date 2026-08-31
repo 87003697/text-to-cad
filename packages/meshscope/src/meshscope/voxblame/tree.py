@@ -140,6 +140,19 @@ def decode_octant_prefix(code: int, depth: int) -> tuple[int, int, int]:
     return tuple(coordinates)
 
 
+def _encode_octant_prefix(x: int, y: int, z: int, depth: int) -> int:
+    """Encode one logical xyz coordinate tuple as a Morton prefix."""
+
+    code = 0
+    for shift in range(depth - 1, -1, -1):
+        code = (code << 3) | (
+            (((x >> shift) & 1) << 2)
+            | (((y >> shift) & 1) << 1)
+            | ((z >> shift) & 1)
+        )
+    return code
+
+
 def tree_from_codes(
     values: Iterable[int] | np.ndarray, max_depth: int
 ) -> SurfaceTree:

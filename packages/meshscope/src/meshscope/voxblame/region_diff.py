@@ -21,7 +21,7 @@ from meshscope.voxblame.errors import (
     OctreeError,
     UnsupportedOrInvalidVoxBlameState,
 )
-from meshscope.voxblame.tree import decode_octant_prefix
+from meshscope.voxblame.tree import _encode_octant_prefix, decode_octant_prefix
 from meshscope.voxblame.targets import _expand_region_set, page_repair_targets
 from meshscope.voxblame.tree import SurfaceTree
 
@@ -1064,18 +1064,6 @@ def _interior_halo(cells: set[int]) -> set[int]:
                     ):
                         halo.add(_encode_octant_prefix(*point, MAX_DEPTH))
     return halo - cells
-
-
-def _encode_octant_prefix(x: int, y: int, z: int, depth: int) -> int:
-    code = 0
-    for shift in range(depth - 1, -1, -1):
-        code = (code << 3) | (
-            (((x >> shift) & 1) << 2)
-            | (((y >> shift) & 1) << 1)
-            | ((z >> shift) & 1)
-        )
-    return code
-
 
 def _measurement_trajectory(
     before: dict[str, Any], after: dict[str, Any]

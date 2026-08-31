@@ -20,8 +20,11 @@ from meshscope.voxblame.errors import (
     OctreeError,
     UnsupportedOrInvalidVoxBlameState,
 )
-from meshscope.voxblame.tree import decode_octant_prefix
-from meshscope.voxblame.tree import SurfaceTree
+from meshscope.voxblame.tree import (
+    SurfaceTree,
+    decode_octant_prefix,
+    _encode_octant_prefix,
+)
 
 if TYPE_CHECKING:
     from meshscope.voxblame.exterior import ExteriorMeasurement
@@ -379,18 +382,6 @@ def project_target_local_occupancy(
         "reference": cube(reference),
         "candidate": cube(candidate),
     }
-
-
-def _encode_octant_prefix(x: int, y: int, z: int, depth: int) -> int:
-    code = 0
-    for shift in range(depth - 1, -1, -1):
-        code = (code << 3) | (
-            (((x >> shift) & 1) << 2)
-            | (((y >> shift) & 1) << 1)
-            | ((z >> shift) & 1)
-        )
-    return code
-
 
 def inspect_repair_frontier(
     workspace: str | Path, *, step: int, offset: int = 0
