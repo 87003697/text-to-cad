@@ -417,8 +417,8 @@
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/__init__.py",
-      "sha256": "768f88e4df3354a48e366095261ea1fa7b8f4a3c337c83f213aaee965b7b21c9",
-      "size": 3461
+      "sha256": "57def7290d983c6dfecf522101146f84912561328c26acc32fd7e251bb3b32d9",
+      "size": 3535
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/canonical_artifacts.py",
@@ -472,8 +472,8 @@
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/targets.py",
-      "sha256": "5675aff5deb491136edf3df5bde06fa2b4b601c6b2e5cbd721e364e3740f5eab",
-      "size": 41915
+      "sha256": "4782cb1b6ba457f16d1d6afe0b092c3e92cc8cbd1a73eb99b9e2d93e7d5f0fad",
+      "size": 44560
     },
     {
       "path": "packages/meshscope/src/meshscope/voxblame/tree.py",

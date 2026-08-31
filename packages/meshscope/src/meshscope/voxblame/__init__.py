@@ -63,6 +63,7 @@ from meshscope.voxblame.targets import (
     active_repair_depth,
     inspect_repair_frontier,
     page_repair_targets,
+    project_target_local_occupancy,
 )
 from meshscope.voxblame.tree import SurfaceTree, tree_from_codes
 from meshscope.voxblame.verification import (
@@ -112,6 +113,7 @@ __all__ = [
     "measure_step",
     "inspect_repair_frontier",
     "page_repair_targets",
+    "project_target_local_occupancy",
     "read_surface_tree",
     "prepare_reference",
     "prepare_preview_scene",

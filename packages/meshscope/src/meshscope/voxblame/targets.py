@@ -321,6 +321,77 @@ def _prefix_bounds(prefix: int, depth: int) -> dict[str, list[float]]:
     }
 
 
+def project_target_local_occupancy(
+    reference_tree: SurfaceTree,
+    candidate_tree: SurfaceTree,
+    *,
+    target_bounds: dict[str, list[float]],
+    active_depth: int,
+) -> dict[str, Any]:
+    """Project two depth-8 snapshots onto one target-local active-depth cube."""
+
+    if (
+        reference_tree.max_depth != MAX_DEPTH
+        or candidate_tree.max_depth != MAX_DEPTH
+        or type(active_depth) is not int
+        or isinstance(active_depth, bool)
+        or not 1 <= active_depth <= MAX_DEPTH
+    ):
+        raise OctreeError("target-local occupancy requires active-depth snapshots")
+    resolution = 1 << active_depth
+    try:
+        coordinates = tuple(
+            int((target_bounds["min"][axis] + 0.5) * resolution)
+            for axis in range(3)
+        )
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        raise OctreeError("target-local occupancy bounds are invalid") from exc
+    if not all(0 <= value < resolution for value in coordinates):
+        raise OctreeError("target-local occupancy bounds leave the canonical frame")
+    prefix = _encode_octant_prefix(*coordinates, active_depth)
+    if target_bounds != _prefix_bounds(prefix, active_depth):
+        raise OctreeError("target bounds do not identify one active-depth cell")
+    shift = 3 * (MAX_DEPTH - active_depth)
+    reference = {int(code) >> shift for code in reference_tree.iter_leaf_codes()}
+    candidate = {int(code) >> shift for code in candidate_tree.iter_leaf_codes()}
+
+    def cube(occupied: set[int]) -> list[list[list[bool | None]]]:
+        return [
+            [
+                [
+                    (
+                        _encode_octant_prefix(x, y, z, active_depth) in occupied
+                        if all(
+                            0 <= value < resolution
+                            for value in (x, y, z)
+                        )
+                        else None
+                    )
+                    for z in range(coordinates[2] - 1, coordinates[2] + 2)
+                ]
+                for y in range(coordinates[1] - 1, coordinates[1] + 2)
+            ]
+            for x in range(coordinates[0] - 1, coordinates[0] + 2)
+        ]
+
+    return {
+        "target": [1, 1, 1],
+        "reference": cube(reference),
+        "candidate": cube(candidate),
+    }
+
+
+def _encode_octant_prefix(x: int, y: int, z: int, depth: int) -> int:
+    code = 0
+    for shift in range(depth - 1, -1, -1):
+        code = (code << 3) | (
+            (((x >> shift) & 1) << 2)
+            | (((y >> shift) & 1) << 1)
+            | ((z >> shift) & 1)
+        )
+    return code
+
+
 def inspect_repair_frontier(
     workspace: str | Path, *, step: int, offset: int = 0
 ) -> dict[str, Any]:
@@ -1089,4 +1160,5 @@ __all__ = [
     "active_repair_depth",
     "inspect_repair_frontier",
     "page_repair_targets",
+    "project_target_local_occupancy",
 ]

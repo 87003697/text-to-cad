@@ -461,6 +461,18 @@ def _load_target_section_profile(meshscope_src: Path | None = None) -> Callable[
     return target_section_profile
 
 
+def _load_target_local_occupancy(
+    meshscope_src: Path | None = None,
+) -> tuple[Callable[..., Any], Callable[..., Any]]:
+    with _shipped_package_import(meshscope_src or _MESHSCOPE_SRC, "meshscope"):
+        from meshscope.voxblame import (
+            project_target_local_occupancy,
+            read_surface_tree,
+        )
+
+    return project_target_local_occupancy, read_surface_tree
+
+
 def _load_agent_surface_type(product_root: Path | None = None) -> type[Any]:
     source = (Path(product_root) if product_root is not None else Path(__file__).resolve().parents[2]) / "skills/mesh-to-cad/scripts/mesh-to-cad-agent-surface/handler.py"
     module_name = _handler_module_name(source, legacy=product_root is None)
@@ -840,6 +852,10 @@ class WorkspaceSupervisor:
             self._target_section_profile = _load_target_section_profile(
                 trusted_meshscope_src
             )
+            (
+                self._target_local_occupancy,
+                self._read_surface_tree,
+            ) = _load_target_local_occupancy(trusted_meshscope_src)
             self._attempts: dict[int, _AttemptContext] = {}
             self._observed_target_steps: set[int] = set()
             self._publication_condition = threading.Condition()
@@ -2240,40 +2256,35 @@ class WorkspaceSupervisor:
                 self.workspace, step=step_number, rank=rank
             )
             core_bounds = binding["core_bounds_canonical"]
-            neighborhood_bounds = binding["neighborhood_bounds_canonical"]
             reference_core = self._target_section_profile(
                 binding["reference_path"], core_bounds
             )
             candidate_core = self._target_section_profile(
                 binding["candidate_path"], core_bounds
             )
-            reference_neighborhood = (
-                self._target_section_profile(
-                    binding["reference_path"], neighborhood_bounds
+            occupancy_binding = binding["occupancy_binding"]
+            local_occupancy = (
+                self._target_local_occupancy(
+                    self._read_surface_tree(
+                        occupancy_binding["reference_tree_path"]
+                    ),
+                    self._read_surface_tree(
+                        occupancy_binding["candidate_tree_path"]
+                    ),
+                    target_bounds=core_bounds,
+                    active_depth=occupancy_binding["active_depth"],
                 )
-                if neighborhood_bounds is not None
-                else None
-            )
-            candidate_neighborhood = (
-                self._target_section_profile(
-                    binding["candidate_path"], neighborhood_bounds
-                )
-                if neighborhood_bounds is not None
+                if occupancy_binding is not None
                 else None
             )
         except Exception as exc:
             raise SupervisorError("target_section_unavailable") from exc
         return {
-            "schema": "mesh-to-cad.target-section-observation/2",
+            "schema": "mesh-to-cad.target-section-observation/3",
             "rank": rank,
-            "reference": {
-                "core": reference_core,
-                "neighborhood": reference_neighborhood,
-            },
-            "candidate": {
-                "core": candidate_core,
-                "neighborhood": candidate_neighborhood,
-            },
+            "reference": {"core": reference_core},
+            "candidate": {"core": candidate_core},
+            "local_occupancy": local_occupancy,
         }
 
     def acknowledge_target_section_observation(
@@ -2284,6 +2295,20 @@ class WorkspaceSupervisor:
         step_number = self.registry.resolve(step_handle, "step")
         with self._publication_condition:
             self._observed_target_steps.add(step_number)
+
+    def target_section_requires_local_occupancy(
+        self, step_handle: str, rank: int
+    ) -> bool:
+        """Bind nullable occupancy to the requested committed public target."""
+
+        step_number = self.registry.resolve(step_handle, "step")
+        try:
+            binding = self.workspace_api.bind_step_target_section(
+                self.workspace, step=step_number, rank=rank
+            )
+        except Exception as exc:
+            raise SupervisorError("target_section_unavailable") from exc
+        return binding["occupancy_binding"] is not None
 
     def _submit_publication_request(
         self,

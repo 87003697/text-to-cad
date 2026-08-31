@@ -72,13 +72,16 @@ workflow state. An empty target set has one valid empty page at offset zero.
 and one public target `rank`, and is available only between Attempts in the
 preterminal state. W1 resolves that rank through the same committed directional
 target projection as paging, while W3 privately binds the canonical Reference
-and that Step's committed candidate mesh. Its
-`mesh-to-cad.target-section-observation/2` result contains only the rank plus
-Reference and candidate `core` and `neighborhood` profiles. Each profile has a
-triangle count and fixed X/Y/Z eight-slab values. For missing/excess targets,
-W1 derives the fixed one-cell neighborhood from that Step's committed Active
-Depth and clips it to the canonical frame. For exterior targets both
-neighborhoods are `null`, while the core remains available.
+and that Step's committed candidate mesh and surface snapshots. Its
+`mesh-to-cad.target-section-observation/3` result contains the rank, Reference
+and candidate `core` profiles, and `local_occupancy`. Each core has a triangle
+count and fixed X/Y/Z eight-slab values. For missing/excess targets,
+`local_occupancy` contains separate Reference and candidate `[x][y][z]` 3×3×3
+Active-Depth cubes centered at `target:[1,1,1]`; booleans distinguish occupied
+and in-frame empty cells, and matching `null` cells mark the canonical-frame
+boundary. Exterior targets retain both cores and return `local_occupancy:null`.
+The cubes describe only target-local lattice adjacency; connectivity, semantic
+identity, and thickness remain outside this observation.
 It mints no handle, accepts no arbitrary bounds, and exposes no target key,
 mask, path, Depth-8 identity, Component, or capability detail.
 

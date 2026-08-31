@@ -243,11 +243,13 @@ inspect_repair_targets while an Attempt is active.
 Before writing the plan, call observe_target_section for only the few competing
 or semantically relevant public ranks under consideration, including at least
 one rank per distinct geometry pair. The core locates the target cell and the
-neighborhood describes adjacent Reference/candidate surface; exterior targets
-have a null neighborhood and expose only the core. These fixed local profiles
-are geometric evidence only: they cannot change target kind, replace the Spec,
-identify a Component, establish semantic ownership, or turn normals into a
-semantic label. If any profile used by the hypothesis has only one or two
+separate Reference/candidate occupancy cubes describe target-local Active-Depth
+adjacency and canonical-frame boundaries; exterior targets expose only the
+core. Use the core for sections and normals. This fixed local geometry cannot
+change target kind, replace the Spec,
+identify a Component, establish semantic ownership, long-range connectivity,
+or thickness, or turn normals into a semantic label. If any profile used by
+the hypothesis has only one or two
 triangles, treat it as ambiguous_low_sample and make no directional or semantic
 assertion from its normals. Do not call it while an Attempt is active.
 On an error, preserve its classification and do not retry blindly. For a closed

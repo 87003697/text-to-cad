@@ -1712,14 +1712,23 @@ def bind_step_target_section(
         "active_depth"
     ]
     core_bounds = match["bounds_canonical"]
-    neighborhood_bounds = None
+    occupancy_binding = None
     if match["kind"] != "exterior":
         if active_depth is None:
             _decision_facts_fail("interior repair target has no active depth")
-        width = 2.0 ** -active_depth
-        neighborhood_bounds = {
-            "min": [max(-0.5, value - width) for value in core_bounds["min"]],
-            "max": [min(0.5, value + width) for value in core_bounds["max"]],
+        reference_tree = workspace / "voxblame" / "reference.vbsvo"
+        candidate_tree = (
+            workspace / "voxblame" / "steps" / f"{step:06d}" / "candidate.vbsvo"
+        )
+        if any(
+            path.is_symlink() or not path.is_file()
+            for path in (reference_tree, candidate_tree)
+        ):
+            _decision_facts_fail("committed target occupancy snapshots are unavailable")
+        occupancy_binding = {
+            "active_depth": active_depth,
+            "reference_tree_path": reference_tree,
+            "candidate_tree_path": candidate_tree,
         }
     reference = read_canonical_reference_binding(workspace)["path"]
     candidate = workspace / "steps" / f"{step:06d}" / "candidate" / CANDIDATE_MESH_RELATIVE
@@ -1729,7 +1738,7 @@ def bind_step_target_section(
         )
     return {
         "core_bounds_canonical": core_bounds,
-        "neighborhood_bounds_canonical": neighborhood_bounds,
+        "occupancy_binding": occupancy_binding,
         "reference_path": reference,
         "candidate_path": candidate,
     }

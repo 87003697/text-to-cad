@@ -78,6 +78,10 @@ class SupervisorPorts(Protocol):
         self, step_handle: str, rank: int
     ) -> Mapping[str, Any]: ...
 
+    def target_section_requires_local_occupancy(
+        self, step_handle: str, rank: int
+    ) -> bool: ...
+
     def acknowledge_target_section_observation(
         self, step_handle: str, rank: int
     ) -> None: ...
@@ -274,7 +278,7 @@ def _next_result(value: Any, path: str) -> list[str]:
 
 DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/2"
 REPAIR_TARGET_PAGE_SCHEMA = "mesh-to-cad.repair-target-page/1"
-TARGET_SECTION_OBSERVATION_SCHEMA = "mesh-to-cad.target-section-observation/2"
+TARGET_SECTION_OBSERVATION_SCHEMA = "mesh-to-cad.target-section-observation/3"
 _DECISION_FACT_MAX_TARGETS = 8
 _ACCEPTANCE_STATE_VALUES = ("acceptance_satisfied", "unaccepted")
 
@@ -785,33 +789,99 @@ def _target_section_side(value: Any, path: str) -> dict[str, Any]:
 
 
 def _validate_target_section_result(value: Any, path: str) -> dict[str, Any]:
-    value = _closed(value, ("schema", "rank", "reference", "candidate"), path)
+    value = _closed(
+        value,
+        ("schema", "rank", "reference", "candidate", "local_occupancy"),
+        path,
+    )
     if value["schema"] != TARGET_SECTION_OBSERVATION_SCHEMA:
         _fail("supervisor_contract_violation", f"{path}.schema")
     sides: dict[str, dict[str, Any]] = {}
-    neighborhood_null: bool | None = None
     for name in ("reference", "candidate"):
-        side = _closed(value[name], ("core", "neighborhood"), f"{path}.{name}")
-        neighborhood = side["neighborhood"]
-        is_null = neighborhood is None
-        if neighborhood_null is not None and neighborhood_null != is_null:
-            _fail("supervisor_contract_violation", f"{path}.{name}.neighborhood")
-        neighborhood_null = is_null
+        side = _closed(value[name], ("core",), f"{path}.{name}")
         sides[name] = {
             "core": _target_section_side(side["core"], f"{path}.{name}.core"),
-            "neighborhood": (
-                None
-                if is_null
-                else _target_section_side(
-                    neighborhood, f"{path}.{name}.neighborhood"
+        }
+    local_occupancy = value["local_occupancy"]
+    if local_occupancy is not None:
+        local_occupancy = _closed(
+            local_occupancy,
+            ("target", "reference", "candidate"),
+            f"{path}.local_occupancy",
+        )
+        if (
+            local_occupancy["target"] != [1, 1, 1]
+            or any(type(item) is not int for item in local_occupancy["target"])
+        ):
+            _fail(
+                "supervisor_contract_violation",
+                f"{path}.local_occupancy.target",
+            )
+        cubes: dict[str, list[list[list[bool | None]]]] = {}
+        null_masks: dict[str, list[bool]] = {}
+        for name in ("reference", "candidate"):
+            cube = local_occupancy[name]
+            if (
+                type(cube) is not list
+                or len(cube) != 3
+                or any(type(plane) is not list or len(plane) != 3 for plane in cube)
+                or any(
+                    type(row) is not list or len(row) != 3
+                    for plane in cube
+                    for row in plane
                 )
-            ),
+                or any(
+                    cell is not None and type(cell) is not bool
+                    for plane in cube
+                    for row in plane
+                    for cell in row
+                )
+            ):
+                _fail(
+                    "supervisor_contract_violation",
+                    f"{path}.local_occupancy.{name}",
+                )
+            cubes[name] = cube
+            null_masks[name] = [
+                cell is None for plane in cube for row in plane for cell in row
+            ]
+        if null_masks["reference"] != null_masks["candidate"]:
+            _fail("supervisor_contract_violation", f"{path}.local_occupancy")
+        null_mask = null_masks["reference"]
+        if null_mask[13]:
+            _fail("supervisor_contract_violation", f"{path}.local_occupancy")
+        clipped_planes = {
+            (axis, index)
+            for axis in range(3)
+            for index in (0, 2)
+            if all(
+                null_mask[x * 9 + y * 3 + z]
+                for x in range(3)
+                for y in range(3)
+                for z in range(3)
+                if (x, y, z)[axis] == index
+            )
+        }
+        if any(
+            is_null
+            != any((axis, (x, y, z)[axis]) in clipped_planes for axis in range(3))
+            for x in range(3)
+            for y in range(3)
+            for z in range(3)
+            for is_null in (null_mask[x * 9 + y * 3 + z],)
+        ):
+            _fail("supervisor_contract_violation", f"{path}.local_occupancy")
+        local_occupancy = {
+            "target": [1, 1, 1],
+            "reference": cubes["reference"],
+            "candidate": cubes["candidate"],
         }
     return {
         "schema": TARGET_SECTION_OBSERVATION_SCHEMA,
         "rank": _integer(value["rank"], f"{path}.rank"),
         "reference": sides["reference"],
         "candidate": sides["candidate"],
+        "local_occupancy": local_occupancy,
     }
 
 
@@ -1029,6 +1099,9 @@ class AgentSurface:
                 result = self._ports.inspect_repair_targets(**args)
             elif intent == "observe_target_section":
                 result = self._ports.observe_target_section(**args)
+                target_section_requires_local_occupancy = (
+                    self._ports.target_section_requires_local_occupancy(**args)
+                )
             elif intent == "select_and_finalize":
                 result = self._ports.select_and_finalize(**args)
             else:
@@ -1053,6 +1126,11 @@ class AgentSurface:
                 type(result) is not dict or result.get("rank") != args["rank"]
             ):
                 _fail("supervisor_contract_violation", "$.result.rank")
+            elif intent == "observe_target_section" and (
+                (result.get("local_occupancy") is not None)
+                is not target_section_requires_local_occupancy
+            ):
+                _fail("supervisor_contract_violation", "$.result.local_occupancy")
             result = spec.result(result, "$.result")
         except AgentSurfaceError:
             _fail("supervisor_contract_violation", "$.result")

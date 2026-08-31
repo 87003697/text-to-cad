@@ -65,8 +65,8 @@ a closed result plus the list of intents permitted next.
   Repair Target through the fixed client. It returns only the public
   `{rank, kind, bounds_canonical}` triples.
 - `observe_target_section` — use a published Step's opaque `step_handle` and
-  one public target rank to compare fixed local Reference and candidate
-  core and adjacent-neighborhood section profiles.
+  one public target rank to compare Reference and candidate core section
+  profiles plus target-local Active-Depth occupancy.
 - `select_and_finalize` — request the supervisor's final result from an
   opaque `step_handle` naming the Selected Step plus an authored
   selection handle (a bounded semantic claim) and notes handle. You do
@@ -189,11 +189,14 @@ Each intent has its own closed result shape:
   `remaining`, `offset`, `next_offset`, `items`. Its schema is
   `mesh-to-cad.repair-target-page/1`; every item is exactly
   `{rank, kind, bounds_canonical}`.
-- `observe_target_section`: exactly `schema`, `rank`, `reference`, and
-  `candidate`, with schema `mesh-to-cad.target-section-observation/2`.
-  Each side contains exactly `core` and `neighborhood`. `core` contains only
-  `triangle_count` and fixed X/Y/Z eight-slab `profiles`; `neighborhood` has
-  the same shape for missing/excess targets and is `null` for exterior targets.
+- `observe_target_section`: exactly `schema`, `rank`, `reference`, `candidate`,
+  and `local_occupancy`, with schema
+  `mesh-to-cad.target-section-observation/3`. Each side contains one `core`
+  with only `triangle_count` and fixed X/Y/Z eight-slab `profiles`.
+  `local_occupancy` is `null` for exterior targets; otherwise it contains
+  `target:[1,1,1]` and separate Reference and candidate 3×3×3 boolean/null
+  cubes indexed `[x][y][z]`. `true` is occupied, `false` is in-frame empty,
+  and `null` is outside the canonical frame.
 
 `observe_reference` is not a workflow-state response. Its `result` is exactly
 `{"observation":{"method":"<method>","value":{...}}}`. A `summary` value
@@ -560,11 +563,13 @@ Rules for using decision facts:
   Before writing the plan, call `observe_target_section` for the small set of
   competing or semantically relevant targets you are considering. Do not
   observe every target, but observe at least one target for each distinct
-  geometry pair under consideration. The `core` locates the target cell; the
-  `neighborhood` describes adjacent Reference and candidate surface. Exterior
-  targets expose only the core. This local geometry cannot change `kind`,
+  geometry pair under consideration. Use the separate occupancy cubes to read
+  add/remove polarity, local continuation, and canonical-frame boundaries;
+  use `core` profiles for sectional geometry and normals. Exterior targets
+  expose only the core. This local geometry cannot change `kind`,
   replace the Reconstruction Spec, identify a Component, establish semantic
-  ownership, or turn normals into a semantic label. If any profile used by
+  ownership, establish long-range connectivity or thickness, or turn normals
+  into a semantic label. If any profile used by
   your hypothesis has only one or two triangles, treat it as
   `ambiguous_low_sample` and make no directional or semantic claim from its
   normals.
@@ -600,8 +605,9 @@ Repair Cycle. The supervisor enforces this shape:
    every `next_offset` on the same Step before selecting a target. Then create
    or update the Reconstruction Spec. Observe the few competing or semantically
    relevant target ranks with `observe_target_section` before forming a repair
-   hypothesis, including at least one per distinct geometry pair; use the core
-   to locate the cell and the neighborhood only to understand adjacent surface.
+   hypothesis, including at least one per distinct geometry pair; use the
+   occupancy cubes for local lattice adjacency and the core for sections and
+   normals.
    Preserve low-sample ambiguity and do not infer Components or semantics from
    normals. Replace
    `/candidate/plan.json` with a `voxblame.repair-batch/1` that repeats the
