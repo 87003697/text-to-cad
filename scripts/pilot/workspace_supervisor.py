@@ -841,6 +841,7 @@ class WorkspaceSupervisor:
                 trusted_meshscope_src
             )
             self._attempts: dict[int, _AttemptContext] = {}
+            self._observed_target_sections: set[tuple[int, int]] = set()
             self._publication_condition = threading.Condition()
             self._publication_flights: dict[
                 tuple[str, str, str, str], _PublicationFlight
@@ -2275,6 +2276,15 @@ class WorkspaceSupervisor:
             },
         }
 
+    def acknowledge_target_section_observation(
+        self, step_handle: str, rank: int
+    ) -> None:
+        """Record one section only after the Agent Surface closes its result."""
+
+        step_number = self.registry.resolve(step_handle, "step")
+        with self._publication_condition:
+            self._observed_target_sections.add((step_number, rank))
+
     def _submit_publication_request(
         self,
         workspace_handle: str,
@@ -2589,6 +2599,10 @@ class WorkspaceSupervisor:
         if attempt_is_active or publication_in_flight:
             raise SupervisorError("attempt_already_active")
         selected_step = self.registry.resolve(step_handle, "step")
+        with self._publication_condition:
+            selected_step_has_target_section_observation = any(
+                step == selected_step for step, _rank in self._observed_target_sections
+            )
         selection = self.registry.resolve(selection_handle, "selection")
         notes = self.registry.resolve(notes_handle, "notes")
         _safe_relative(self.candidate_root, selection)
@@ -2605,6 +2619,9 @@ class WorkspaceSupervisor:
                 "selection": selection.relative_to(self.candidate_root).as_posix(),
                 "notes": notes.relative_to(self.candidate_root).as_posix(),
                 "selected_step": selected_step,
+                "selected_step_has_target_section_observation": (
+                    selected_step_has_target_section_observation
+                ),
                 "rebuild_entrypoint": self._rebuild_entrypoint,
                 "geometry_entrypoint": self._geometry_entrypoint,
                 "tool_registry": self._tool_registry,
@@ -2621,6 +2638,8 @@ class WorkspaceSupervisor:
         except SupervisorError:
             raise
         except Exception as exc:
+            if getattr(exc, "classification", None) == "state_conflict":
+                raise SupervisorError("state_conflict") from exc
             raise SupervisorError("finalization_failed") from exc
         final_handle = self.registry.issue("final", finalized, reusable=False)
         return {

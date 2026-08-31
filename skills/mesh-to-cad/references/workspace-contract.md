@@ -82,6 +82,17 @@ neighborhoods are `null`, while the core remains available.
 It mints no handle, accepts no arbitrary bounds, and exposes no target key,
 mask, path, Depth-8 identity, Component, or capability detail.
 
+For an unaccepted Selected Step that still has public Repair Targets,
+`no_feasible_strategy` finalization requires one successfully closed
+`observe_target_section` response for that exact Step. W4 records this
+run-private receipt only after the Agent Surface validates the response and its
+production transport successfully writes and flushes it. It is not
+Agent-authored evidence and is never serialized into Final Delivery. A
+receipt for another Step cannot authorize the selection. A missing receipt
+returns `state_conflict` before finalization staging or publication; the same
+selection and notes handles remain usable after `workspace_status` and a valid
+observation of the Selected Step.
+
 The standalone adapters have no supervisor discovery fallback: without W4
 ports they return a closed `supervisor_unavailable` error. W4 owns the concrete
 ports and the process/filesystem wiring that binds these handles to Workspace,

@@ -1865,6 +1865,7 @@ def finalize_from_agent_selection_claim(
     selection: str,
     notes: str,
     selected_step: int,
+    selected_step_has_target_section_observation: bool,
     rebuild_entrypoint: Path,
     geometry_entrypoint: Path,
     tool_registry: Path,
@@ -1915,39 +1916,57 @@ def finalize_from_agent_selection_claim(
     )
     accepted = step_document["accepted"]
     preview_identity = step_document["preview_identity_sha256"]
+    if type(selected_step_has_target_section_observation) is not bool:
+        raise WorkspaceError(
+            "invalid_contract",
+            "Selected Step observation receipt must be boolean",
+            "$.selected_step",
+        )
+    selection_source = _agent_source_file(source, selection)
+    try:
+        raw_claim = json.loads(selection_source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise WorkspaceError(
+            "invalid_contract",
+            "Agent selection claim is not readable JSON",
+            "$.selection_claim",
+        ) from error
+    claim = _validate_agent_selection_claim(raw_claim)
+    if claim["conflict"]:
+        raise WorkspaceError(
+            "agent_semantic_conflict",
+            "Agent-reported material semantic conflict blocks Final Delivery",
+            "$.selection_claim.conflict",
+        )
+    if accepted and claim["stop_reason"] != "acceptance_satisfied":
+        raise WorkspaceError(
+            "identity_conflict",
+            "accepted Selected Step requires acceptance_satisfied stop_reason",
+            "$.selection_claim.stop_reason",
+        )
+    if not accepted and claim["stop_reason"] == "acceptance_satisfied":
+        raise WorkspaceError(
+            "identity_conflict",
+            "unaccepted Selected Step cannot claim acceptance_satisfied",
+            "$.selection_claim.stop_reason",
+        )
+    if (
+        claim["stop_reason"] == "no_feasible_strategy"
+        and not accepted
+        and read_step_repair_targets(workspace, step=selected_step, offset=0)["total"]
+        > 0
+        and not selected_step_has_target_section_observation
+    ):
+        raise WorkspaceError(
+            "state_conflict",
+            "Selected Step requires a Target Section observation",
+            "$.selected_step",
+        )
     staging = _reset_finalization_staging(workspace)
     try:
-        selection_source = _agent_source_file(source, selection)
         notes_source = _agent_source_file(source, notes)
         _copy_agent_file(selection_source, staging / "claim.json")
         _copy_agent_file(notes_source, staging / "notes.md")
-        try:
-            raw_claim = json.loads((staging / "claim.json").read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise WorkspaceError(
-                "invalid_contract",
-                "Agent selection claim is not readable JSON",
-                "$.selection_claim",
-            ) from error
-        claim = _validate_agent_selection_claim(raw_claim)
-        if claim["conflict"]:
-            raise WorkspaceError(
-                "agent_semantic_conflict",
-                "Agent-reported material semantic conflict blocks Final Delivery",
-                "$.selection_claim.conflict",
-            )
-        if accepted and claim["stop_reason"] != "acceptance_satisfied":
-            raise WorkspaceError(
-                "identity_conflict",
-                "accepted Selected Step requires acceptance_satisfied stop_reason",
-                "$.selection_claim.stop_reason",
-            )
-        if not accepted and claim["stop_reason"] == "acceptance_satisfied":
-            raise WorkspaceError(
-                "identity_conflict",
-                "unaccepted Selected Step cannot claim acceptance_satisfied",
-                "$.selection_claim.stop_reason",
-            )
         measurement_relative = f"steps/{selected_step:06d}/measurement.json"
         measurement_path = workspace / measurement_relative
         if not measurement_path.is_file() or measurement_path.is_symlink():

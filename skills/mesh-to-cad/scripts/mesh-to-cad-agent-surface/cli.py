@@ -39,7 +39,8 @@ def main(
         if len(raw.encode("utf-8")) > MAX_REQUEST_BYTES:
             raise AgentSurfaceError("request_too_large", "$.request")
         request = json.loads(raw)
-        response = AgentSurface(ports).handle(request)
+        surface = AgentSurface(ports)
+        response = surface.handle(request)
     except AgentSurfaceError as error:
         _emit(output_stream, {"ok": False, **error_document(error)})
         return 2
@@ -48,6 +49,7 @@ def main(
         _emit(output_stream, {"ok": False, **error_document(error)})
         return 2
     _emit(output_stream, {"ok": True, "response": response})
+    surface.acknowledge_written_response(request, response)
     return 0
 
 

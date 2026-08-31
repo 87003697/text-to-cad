@@ -20,6 +20,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 from typing import Any, Mapping, Sequence
 
 from scripts.pilot import plugin_deployment, provider_free_installed_plugin as installed, runner
@@ -39,6 +40,7 @@ EVIDENCE_SCHEMA_V8 = "text-to-cad.provider-free-workspace-repair-chain-evidence/
 EVIDENCE_SCHEMA_V9 = "text-to-cad.provider-free-workspace-repair-chain-evidence/9"
 EVIDENCE_SCHEMA_V10 = "text-to-cad.provider-free-workspace-repair-chain-evidence/10"
 EVIDENCE_SCHEMA_V11 = "text-to-cad.provider-free-workspace-repair-chain-evidence/11"
+EVIDENCE_SCHEMA_V12 = "text-to-cad.provider-free-workspace-repair-chain-evidence/12"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
@@ -114,7 +116,7 @@ def authoring_python_from_evidence(
     _, evidence_path, _ = artifact_paths(repo_root, record)
     try:
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-        if evidence.get("schema") == EVIDENCE_SCHEMA_V11:
+        if evidence.get("schema") in {EVIDENCE_SCHEMA_V11, EVIDENCE_SCHEMA_V12}:
             return None
         identity = evidence["authoring_probe"]["runtime"]["identity"]
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -397,6 +399,78 @@ def _surface_call(socket_path: Path, request: Mapping[str, Any]) -> dict[str, An
     if not isinstance(response, dict):
         raise ProviderFreeError("Agent Surface bridge returned invalid response")
     return response
+
+
+class _FailedObservationWriteBridge(AgentSurfaceBridge):
+    """Coordinate one real socket write failure after a valid observation."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._fail_observation_write = False
+        self.write_started = threading.Event()
+        self.client_closed = threading.Event()
+        self.write_failed = threading.Event()
+        self.valid_observation_frame = False
+
+    def arm_observation_write_failure(self) -> None:
+        self._fail_observation_write = True
+        self.write_started.clear()
+        self.client_closed.clear()
+        self.write_failed.clear()
+        self.valid_observation_frame = False
+
+    def _write(self, stream: Any, value: dict[str, Any]) -> None:
+        response = value.get("response") if value.get("ok") is True else None
+        should_fail = (
+            self._fail_observation_write
+            and isinstance(response, dict)
+            and response.get("intent") == "observe_target_section"
+        )
+        if not should_fail:
+            super()._write(stream, value)
+            return
+        self._fail_observation_write = False
+        result = response.get("result")
+        self.valid_observation_frame = (
+            response.get("schema") == "mesh-to-cad.agent-response/6"
+            and isinstance(result, dict)
+            and result.get("schema")
+            == "mesh-to-cad.target-section-observation/2"
+        )
+        self.write_started.set()
+        if not self.client_closed.wait(timeout=10):
+            raise ProviderFreeError("failed-write client did not disconnect")
+        try:
+            super()._write(stream, value)
+        except OSError:
+            self.write_failed.set()
+            raise
+
+
+def _fail_observation_response_write(
+    bridge: _FailedObservationWriteBridge,
+    request: Mapping[str, Any],
+) -> dict[str, Any]:
+    bridge.arm_observation_write_failure()
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        conn.connect(os.fspath(bridge.socket_path))
+        conn.sendall(json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n")
+        if not bridge.write_started.wait(timeout=10):
+            raise ProviderFreeError("valid observation did not reach response write")
+        conn.shutdown(socket.SHUT_RDWR)
+    finally:
+        conn.close()
+        bridge.client_closed.set()
+    if not bridge.write_failed.wait(timeout=10):
+        raise ProviderFreeError("observation response write did not fail")
+    if not bridge.valid_observation_frame:
+        raise ProviderFreeError("failed write did not follow a valid observation response")
+    return {
+        "schema": "text-to-cad.target-section-failed-write-evidence/1",
+        "valid_observation_response": True,
+        "response_write_failed": True,
+    }
 
 
 def _workspace_status_via_client(
@@ -2239,11 +2313,18 @@ def validate_artifacts(
         )
     if schema == EVIDENCE_SCHEMA_V11:
         return _validate_v11_artifacts(repo_root, record)
+    if schema == EVIDENCE_SCHEMA_V12:
+        return _validate_v11_artifacts(
+            repo_root, record, schema=EVIDENCE_SCHEMA_V12
+        )
     raise ProviderFreeError("unknown evidence schema")
 
 
 def _validate_v11_artifacts(
-    repo_root: Path, record: Mapping[str, Any]
+    repo_root: Path,
+    record: Mapping[str, Any],
+    *,
+    schema: str = EVIDENCE_SCHEMA_V11,
 ) -> tuple[Path, Path]:
     exp_dir, evidence_path, artifact_manifest_path = artifact_paths(repo_root, record)
     try:
@@ -2253,25 +2334,27 @@ def _validate_v11_artifacts(
         raise ProviderFreeError("v11 evidence missing or invalid") from exc
     if evidence_path.stat().st_size > MAX_EVIDENCE_BYTES:
         raise ProviderFreeError("v11 evidence is too large")
+    required = {
+        "schema",
+        "identity",
+        "scenario",
+        "gate_passed",
+        "budget_truth",
+        "selection",
+        "steps",
+        "graph",
+        "failed_attempts",
+        "workspace_validation",
+        "module_paths",
+        "final",
+        "client_transport",
+    }
+    if schema == EVIDENCE_SCHEMA_V12:
+        required.add("observation_gate")
     if (
         not isinstance(evidence, dict)
-        or set(evidence)
-        != {
-            "schema",
-            "identity",
-            "scenario",
-            "gate_passed",
-            "budget_truth",
-            "selection",
-            "steps",
-            "graph",
-            "failed_attempts",
-            "workspace_validation",
-            "module_paths",
-            "final",
-            "client_transport",
-        }
-        or evidence.get("schema") != EVIDENCE_SCHEMA_V11
+        or set(evidence) != required
+        or evidence.get("schema") != schema
         or evidence.get("identity") != expected_identity(record)
         or evidence.get("scenario") != SCENARIO
         or evidence.get("gate_passed") is not True
@@ -2279,7 +2362,7 @@ def _validate_v11_artifacts(
     ):
         raise ProviderFreeError("invalid v11 evidence shape")
     if manifest != {
-        "schema": "text-to-cad.provider-free-artifact-manifest/11",
+        "schema": f"text-to-cad.provider-free-artifact-manifest/{12 if schema == EVIDENCE_SCHEMA_V12 else 11}",
         "final_status": 0,
         "identity": expected_identity(record),
         "evidence": {"path": evidence_path.name},
@@ -2407,6 +2490,97 @@ def _validate_v11_artifacts(
         )
     ):
         raise ProviderFreeError("v11 module provenance is invalid")
+    if schema == EVIDENCE_SCHEMA_V12:
+        gate = evidence["observation_gate"]
+        if (
+            not isinstance(gate, dict)
+            or set(gate)
+            != {
+                "schema",
+                "selected_step",
+                "historical_step",
+                "pre_observation_error",
+                "no_side_effects",
+                "recovery",
+                "historical_observation",
+                "selected_page",
+                "failed_write",
+                "selected_observation",
+                "same_claim_reused",
+                "finalized",
+            }
+            or gate.get("schema")
+            != "text-to-cad.target-section-finalization-gate-evidence/1"
+            or gate.get("selected_step") != steps["repair_a"]["ordinal"]
+            or gate.get("historical_step") != steps["step_zero"]["ordinal"]
+            or gate["selected_step"] == gate["historical_step"]
+            or gate.get("pre_observation_error")
+            != {
+                "schema": "mesh-to-cad.agent-error/1",
+                "error": {
+                    "classification": "state_conflict",
+                    "path": "$.supervisor",
+                    "detail": "state_conflict",
+                },
+            }
+            or gate.get("no_side_effects")
+            != {
+                "final_absent": True,
+                "attempts_unchanged": True,
+                "authority_unchanged": True,
+                "staging_unchanged": True,
+            }
+            or gate.get("recovery")
+            != {
+                "state": "preterminal",
+                "observe_target_section_permitted": True,
+                "select_and_finalize_permitted": True,
+            }
+            or gate.get("same_claim_reused") is not True
+            or gate.get("finalized") is not True
+            or gate.get("failed_write")
+            != {
+                "schema": "text-to-cad.target-section-failed-write-evidence/1",
+                "valid_observation_response": True,
+                "response_write_failed": True,
+            }
+        ):
+            raise ProviderFreeError("invalid v12 observation finalization gate")
+        page = gate["selected_page"]
+        observation = gate["selected_observation"]
+        historical_observation = gate["historical_observation"]
+        if (
+            not isinstance(page, dict)
+            or page.get("schema") != "mesh-to-cad.repair-target-page/1"
+            or page.get("step_ordinal") != gate["selected_step"]
+            or not isinstance(page.get("items"), list)
+            or not page["items"]
+            or not isinstance(observation, dict)
+            or observation.get("schema")
+            != "mesh-to-cad.target-section-observation/2"
+            or observation.get("rank") != page["items"][0].get("rank")
+            or not isinstance(historical_observation, dict)
+            or historical_observation.get("schema")
+            != "mesh-to-cad.target-section-observation/2"
+        ):
+            raise ProviderFreeError("invalid v12 real observation evidence")
+        meshscope_src = repo_root / "packages/meshscope/src"
+        if os.fspath(meshscope_src) not in sys.path:
+            sys.path.insert(0, os.fspath(meshscope_src))
+        from meshscope import target_section_profile
+
+        if observation != _authority_target_section_v2(
+            exp_dir,
+            gate["selected_step"],
+            observation["rank"],
+            target_section_profile,
+        ) or historical_observation != _authority_target_section_v2(
+            exp_dir,
+            gate["historical_step"],
+            historical_observation["rank"],
+            target_section_profile,
+        ):
+            raise ProviderFreeError("v12 observation differs from committed authority")
     public_text = json.dumps(evidence, sort_keys=True).lower()
     if any(
         token in public_text
@@ -2421,6 +2595,20 @@ def _validate_v11_artifacts(
         )
     ):
         raise ProviderFreeError("v11 evidence leaked private detail")
+    if schema == EVIDENCE_SCHEMA_V12 and any(
+        token in public_text
+        for token in (
+            '"handle"',
+            "target_key",
+            "mask_sha256",
+            "depth8",
+            "capability_path",
+            '"path": "/',
+            "/users/",
+            "/home/",
+        )
+    ):
+        raise ProviderFreeError("v12 observation gate leaked private detail")
     return evidence_path, artifact_manifest_path
 
 
@@ -2458,7 +2646,11 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         registry_document = json.loads(registry.read_text(encoding="utf-8"))
         supervisor = WorkspaceSupervisor(exp_dir, bind_reference=True, candidate_root=candidate_root, rebuild_entrypoint=published_rebuild, geometry_entrypoint=published_geometry, tool_registry=registry, browser_runtime_capability=sidecar.capability_dir / "runtime.json", candidate_runtime=candidate_lease.runtime, trusted_tools_root=trusted, trusted_product_root=trusted, reconstruction_spec=True, step_zero_evidence_provider=lambda req: runner.real_step_zero_evidence_provider(req, capability_path=sidecar.capability_dir / "runtime.json", meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src", meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src"), repair_evidence_provider=lambda req: runner.real_repair_evidence_provider(req, capability_path=sidecar.capability_dir / "runtime.json", meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src", meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src"))
         socket_dir = Path(tempfile.mkdtemp(prefix="ttc-a-", dir="/tmp"))
-        bridge = AgentSurfaceBridge(supervisor.agent_surface(), socket_dir / "surface.sock", trusted_product_root=trusted)
+        bridge = _FailedObservationWriteBridge(
+            supervisor.agent_surface(),
+            socket_dir / "surface.sock",
+            trusted_product_root=trusted,
+        )
         bridge.start(); sidecar.start(); sidecar.preflight(); sidecar.preflight_mcp()
         bootstrap = supervisor.agent_bootstrap_contract(); surface = supervisor.agent_surface(); wh = bootstrap["workspace_handle"]; ph = bootstrap["plan_handle"]
         client_status, client_transport = _workspace_status_via_client(
@@ -2567,14 +2759,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         repair_a_targets = repair_a["decision_facts"].get("repair_targets", {}).get("items", [])
         if not repair_a_targets:
             raise ProviderFreeError("Repair A has no Target Section discriminator")
-        repair_a_section = _read_target_section(
-            bridge.socket_path,
-            repair_a["step_handle"],
-            repair_a_targets[0]["rank"],
-        )
-        non_tied = _non_tied_profile(step_zero_section) or _non_tied_profile(
-            repair_a_section
-        )
+        non_tied = _non_tied_profile(step_zero_section)
         if historical_section != step_zero_section or non_tied is None:
             raise ProviderFreeError("Target Section observation discriminator failed")
         repair_b, png_b, mcp_b = submit_child(repair_a, repair_a["decision_facts"]["step_ordinal"], max(published_ordinals) + 1, REPAIR_B_WIDTH, "shrink-primary", "shrink below the reference as a regression", "Repair B shrinks the candidate and underfits the reference.", "Applied the bounded shrink regression hypothesis.")
@@ -2675,10 +2860,104 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         selection_path = candidate_root / "selection.json"
         notes_path = candidate_root / "notes.md"
         best_name = {"step_zero": "Step 0", "repair_a": "Repair A", "repair_c": "Repair C"}[best_label]
+        if best_label != "repair_a":
+            raise ProviderFreeError("observation gate fixture did not select Repair A")
         _json(selection_path, {"schema": "mesh-to-cad.agent-selection-claim/1", "preview_observation": f"{best_name} is the strongest measured result after the bounded recovery trajectory.", "stop_reason": "no_feasible_strategy", "conflict": False, "conflict_details": None, "rationale": f"{best_name} is the strongest returned result after comparing the bounded repair trajectory; the next intended step exhausted its local Attempts while seven Repair Cycles remained."})
         notes_path.write_text(f"## Input\n\nThe input was measured against the committed reference fixture.\n## Modeling Intent\n\nThe candidate models the bounded box reconstruction intent.\n## Preserved Structural Features\n\nThe measured candidate preserves the primary solid structure.\n## Omitted Surface Details\n\nResidual surface details remain outside this deterministic gate.\n## Repair Trajectory\n\n{best_name} is the best-so-far result; the next intended step exhausted its local Attempts while global Repair capacity remained.\n## Final Selection\n\nThe best-so-far result is {best_name}, selected from its returned opaque handle.\n## Verification\n\nFinal verification is bound to {best_name} and its committed measurement.\n", encoding="utf-8")
-        final_response = surface.handle({"schema": "mesh-to-cad.agent-intent/1", "intent": "select_and_finalize", "args": {"workspace_handle": wh, "step_handle": best["step_handle"], "selection_handle": bootstrap["selection_handle"], "notes_handle": bootstrap["notes_handle"]}}); _public(final_response)
-        if final_response["result"].get("state") != "finalized": raise ProviderFreeError("historical selection did not finalize")
+        final_request = {"schema": "mesh-to-cad.agent-intent/1", "intent": "select_and_finalize", "args": {"workspace_handle": wh, "step_handle": best["step_handle"], "selection_handle": bootstrap["selection_handle"], "notes_handle": bootstrap["notes_handle"]}}
+        selected_page = _read_target_page(
+            bridge.socket_path, repair_a["step_handle"], 0
+        )
+        if not selected_page["items"]:
+            raise ProviderFreeError("Selected Step has no paged public target")
+        selected_rank = selected_page["items"][0]["rank"]
+        failed_write = _fail_observation_response_write(
+            bridge,
+            {
+                "schema": "mesh-to-cad.agent-intent/1",
+                "intent": "observe_target_section",
+                "args": {
+                    "step_handle": repair_a["step_handle"],
+                    "rank": selected_rank,
+                },
+            },
+        )
+        authority_before_gate = supervisor.workspace_api.workspace_status(exp_dir)
+        attempts_before_gate = attempt_documents()
+        staging_before_gate = (exp_dir / "work/agent-finalization").exists()
+        blocked_final = _surface_call(bridge.socket_path, final_request)
+        _public(blocked_final)
+        expected_gate_error = {
+            "schema": "mesh-to-cad.agent-error/1",
+            "error": {
+                "classification": "state_conflict",
+                "path": "$.supervisor",
+                "detail": "state_conflict",
+            },
+        }
+        if blocked_final != {"ok": False, **expected_gate_error}:
+            raise ProviderFreeError("missing Target Section receipt did not fail closed")
+        recovery_status, _recovery_transport = _workspace_status_via_client(
+            trusted / ".claude/agent-source-projection/agent-surface/client.py",
+            bridge.socket_path,
+            wh,
+        )
+        recovery_result = recovery_status["result"]
+        no_side_effects = {
+            "final_absent": not (exp_dir / "final").exists(),
+            "attempts_unchanged": attempt_documents() == attempts_before_gate,
+            "authority_unchanged": supervisor.workspace_api.workspace_status(exp_dir)
+            == authority_before_gate,
+            "staging_unchanged": (exp_dir / "work/agent-finalization").exists()
+            == staging_before_gate,
+        }
+        if (
+            no_side_effects != {
+                "final_absent": True,
+                "attempts_unchanged": True,
+                "authority_unchanged": True,
+                "staging_unchanged": True,
+            }
+            or recovery_result.get("state") != "preterminal"
+            or "observe_target_section"
+            not in recovery_result.get("permitted_next_intents", [])
+            or "select_and_finalize"
+            not in recovery_result.get("permitted_next_intents", [])
+        ):
+            raise ProviderFreeError("Target Section receipt rejection changed Workspace state")
+        repair_a_section = _read_target_section(
+            bridge.socket_path,
+            repair_a["step_handle"],
+            selected_rank,
+        )
+        final_frame = _surface_call(bridge.socket_path, final_request)
+        _public(final_frame)
+        final_response = final_frame.get("response") if final_frame.get("ok") is True else None
+        if (
+            not isinstance(final_response, dict)
+            or final_response.get("schema") != "mesh-to-cad.agent-response/6"
+            or final_response.get("intent") != "select_and_finalize"
+            or final_response.get("result", {}).get("state") != "finalized"
+        ):
+            raise ProviderFreeError("observed Selected Step did not finalize")
+        observation_gate = {
+            "schema": "text-to-cad.target-section-finalization-gate-evidence/1",
+            "selected_step": repair_a["decision_facts"]["step_ordinal"],
+            "historical_step": step_ordinal,
+            "pre_observation_error": expected_gate_error,
+            "no_side_effects": no_side_effects,
+            "recovery": {
+                "state": recovery_result["state"],
+                "observe_target_section_permitted": True,
+                "select_and_finalize_permitted": True,
+            },
+            "historical_observation": step_zero_section,
+            "selected_page": selected_page,
+            "failed_write": failed_write,
+            "selected_observation": repair_a_section,
+            "same_claim_reused": True,
+            "finalized": True,
+        }
         cycle_exhaustion = _run_cycle_exhaustion_probe(
             exp_dir / "run/cycle-exhaustion-workspace",
             cycle_fixture,
@@ -2774,7 +3053,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             "cycle_exhaustion": cycle_exhaustion,
         }
         evidence = {
-            "schema": EVIDENCE_SCHEMA_V11,
+            "schema": EVIDENCE_SCHEMA_V12,
             "identity": identity,
             "scenario": SCENARIO,
             "gate_passed": True,
@@ -2812,12 +3091,13 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
                 "identity_bound": final_manifest.get("selected_step") == best["decision_facts"]["step_ordinal"],
             },
             "client_transport": client_transport,
+            "observation_gate": observation_gate,
         }
         _json(evidence_path, evidence)
         _json(
             artifact_manifest_path,
             {
-                "schema": "text-to-cad.provider-free-artifact-manifest/11",
+                "schema": "text-to-cad.provider-free-artifact-manifest/12",
                 "final_status": 0,
                 "identity": identity,
                 "evidence": {"path": evidence_path.name},

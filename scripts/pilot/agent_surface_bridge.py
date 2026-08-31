@@ -213,6 +213,7 @@ class AgentSurfaceBridge:
                     else:
                         self._write(stream, {"__notification__": True})
                     continue
+                response = None
                 try:
                     response = self.surface.handle(request)
                     frame = {"ok": True, "response": response}
@@ -228,6 +229,11 @@ class AgentSurfaceBridge:
                         else:
                             frame = {"ok": False, "error": "supervisor_failure"}
                 self._write(stream, frame)
+                if (
+                    isinstance(response, dict)
+                    and response.get("intent") == "observe_target_section"
+                ):
+                    self.surface.acknowledge_written_response(request, response)
         finally:
             stream.close()
 

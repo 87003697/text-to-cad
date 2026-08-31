@@ -640,7 +640,12 @@ intent response. Use the stop reasons in
 `workspace_status` reports `remaining_cycles: 0`. A per-intended-step Attempt
 or tool-failure limit is never evidence that the global Repair Cycle budget is
 exhausted. If cycles remain but no coherent repair is available, use
-`no_feasible_strategy`.
+`no_feasible_strategy`. Before selecting that stop reason for an unaccepted
+Step with public Repair Targets, observe at least one public target on that
+exact Selected Step. An observation of a historical Step does not satisfy this
+gate. If `select_and_finalize` returns `state_conflict`, call
+`workspace_status`, observe a public target from the Selected Step, then retry
+the same `no_feasible_strategy` selection or continue repairing.
 
 Report exactly what handles the supervisor returned. Do not invent
 identifiers.

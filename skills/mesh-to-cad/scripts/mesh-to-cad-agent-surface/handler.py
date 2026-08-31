@@ -78,6 +78,10 @@ class SupervisorPorts(Protocol):
         self, step_handle: str, rank: int
     ) -> Mapping[str, Any]: ...
 
+    def acknowledge_target_section_observation(
+        self, step_handle: str, rank: int
+    ) -> None: ...
+
     def select_and_finalize(
         self,
         workspace_handle: str,
@@ -958,6 +962,20 @@ class AgentSurface:
 
         return self._handle(request, include_preview=True)
 
+    def acknowledge_written_response(
+        self,
+        request: Mapping[str, Any],
+        response: Mapping[str, Any],
+    ) -> None:
+        """Record transport-closed observations after their response is written."""
+
+        if response.get("intent") != "observe_target_section":
+            return
+        args = request["args"]
+        self._ports.acknowledge_target_section_observation(
+            args["step_handle"], args["rank"]
+        )
+
     def _handle(
         self, request: Mapping[str, Any], *, include_preview: bool
     ) -> tuple[dict[str, Any], bytes | None]:
@@ -1017,7 +1035,12 @@ class AgentSurface:
                 result = self._ports.observe_reference(
                     args["reference_handle"], args["observation"]
                 )
-        except Exception:
+        except Exception as error:
+            if (
+                intent == "select_and_finalize"
+                and getattr(error, "classification", None) == "state_conflict"
+            ):
+                _fail("state_conflict", "$.supervisor")
             _fail("supervisor_failure", "$.supervisor")
         try:
             if intent == "observe_reference":
