@@ -841,7 +841,7 @@ class WorkspaceSupervisor:
                 trusted_meshscope_src
             )
             self._attempts: dict[int, _AttemptContext] = {}
-            self._observed_target_sections: set[tuple[int, int]] = set()
+            self._observed_target_steps: set[int] = set()
             self._publication_condition = threading.Condition()
             self._publication_flights: dict[
                 tuple[str, str, str, str], _PublicationFlight
@@ -2283,7 +2283,7 @@ class WorkspaceSupervisor:
 
         step_number = self.registry.resolve(step_handle, "step")
         with self._publication_condition:
-            self._observed_target_sections.add((step_number, rank))
+            self._observed_target_steps.add(step_number)
 
     def _submit_publication_request(
         self,
@@ -2600,8 +2600,8 @@ class WorkspaceSupervisor:
             raise SupervisorError("attempt_already_active")
         selected_step = self.registry.resolve(step_handle, "step")
         with self._publication_condition:
-            selected_step_has_target_section_observation = any(
-                step == selected_step for step, _rank in self._observed_target_sections
+            selected_step_has_target_section_observation = (
+                selected_step in self._observed_target_steps
             )
         selection = self.registry.resolve(selection_handle, "selection")
         notes = self.registry.resolve(notes_handle, "notes")
