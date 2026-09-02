@@ -428,7 +428,7 @@ def _provider_free_module(scenario: str):
         from scripts.pilot import provider_free_agent_surface_mcp_ephemeral_differential as differential
 
         return differential
-    if scenario == "workspace-repair-chain":
+    if scenario in {"workspace-repair-chain", "workspace-repair-chain-exhaustion"}:
         from scripts.pilot import provider_free_workspace_repair_chain as repair_chain
 
         return repair_chain
@@ -696,7 +696,7 @@ def supervise_provider_free_installed_plugin(
             transition(root, handle, "running", supervisor_pid=os.getpid())
             module_name = provider_free.__name__.rsplit(".", 1)[-1]
             runner_executable = sys.executable
-            if command is None and record.get("scenario") == "workspace-repair-chain":
+            if command is None and record.get("scenario") in {"workspace-repair-chain", "workspace-repair-chain-exhaustion"}:
                 runner_executable = os.fspath(REPO_ROOT / ".venv/bin/python")
                 if not Path(runner_executable).is_file():
                     raise ProtocolError("workspace-repair-chain runner runtime unavailable")
@@ -724,7 +724,7 @@ def supervise_provider_free_installed_plugin(
                     process_exit_code=process_status,
                     failure_reason=f"provider-free runner exited {process_status}",
                 )
-            if record.get("scenario") == "workspace-repair-chain":
+            if record.get("scenario") in {"workspace-repair-chain", "workspace-repair-chain-exhaustion"}:
                 evidence_path, manifest_path = provider_free.validate_artifacts(
                     REPO_ROOT,
                     record,

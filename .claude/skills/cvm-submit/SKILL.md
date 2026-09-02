@@ -70,6 +70,13 @@ provider:
 scripts/pilot/cvm-submit.sh provider-free workspace-repair-chain <group>
 ```
 
+The default repair-chain gate omits the long ten-cycle exhaustion probe. Run
+that regression gate explicitly with:
+
+```bash
+scripts/pilot/cvm-submit.sh provider-free workspace-repair-chain-exhaustion <group>
+```
+
 That mode performs no model inference and accepts no token, model, arbitrary
 command, or scenario argument. It binds the current plugin-authority receipt
 at submit time, revalidates it in the detached supervisor, and runs only

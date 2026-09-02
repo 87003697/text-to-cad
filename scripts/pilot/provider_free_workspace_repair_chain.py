@@ -30,6 +30,7 @@ from scripts.pilot.cvm_job import protocol
 from scripts.pilot.workspace_supervisor import SupervisorError, WorkspaceSupervisor
 
 SCENARIO = "workspace-repair-chain"
+EXHAUSTION_SCENARIO = "workspace-repair-chain-exhaustion"
 EVIDENCE_SCHEMA_V1 = "text-to-cad.provider-free-workspace-repair-chain-evidence/1"
 EVIDENCE_SCHEMA_V2 = "text-to-cad.provider-free-workspace-repair-chain-evidence/2"
 EVIDENCE_SCHEMA_V3 = "text-to-cad.provider-free-workspace-repair-chain-evidence/3"
@@ -44,6 +45,7 @@ EVIDENCE_SCHEMA_V11 = "text-to-cad.provider-free-workspace-repair-chain-evidence
 EVIDENCE_SCHEMA_V12 = "text-to-cad.provider-free-workspace-repair-chain-evidence/12"
 EVIDENCE_SCHEMA_V13 = "text-to-cad.provider-free-workspace-repair-chain-evidence/13"
 EVIDENCE_SCHEMA_V14 = "text-to-cad.provider-free-workspace-repair-chain-evidence/14"
+EVIDENCE_SCHEMA_V15 = "text-to-cad.provider-free-workspace-repair-chain-evidence/15"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
@@ -103,9 +105,9 @@ def expected_identity(record: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(job, str) or "/" not in job or record.get("exp_dir") != f"outputs/{job}":
         raise ProviderFreeError("invalid repair-chain job binding")
     base = installed.expected_identity({**record, "scenario": installed.SCENARIO, "object": installed.SCENARIO})
-    if record.get("provider_free") is not True or record.get("scenario") != SCENARIO or record.get("object") != SCENARIO or record.get("token_slot") is not None:
+    if record.get("provider_free") is not True or record.get("scenario") not in {SCENARIO, EXHAUSTION_SCENARIO} or record.get("object") != record.get("scenario") or record.get("token_slot") is not None:
         raise ProviderFreeError("invalid repair-chain identity")
-    return {**base, "scenario": SCENARIO}
+    return {**base, "scenario": record["scenario"]}
 
 
 def artifact_paths(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Path, Path]:
@@ -124,6 +126,7 @@ def authoring_python_from_evidence(
             EVIDENCE_SCHEMA_V12,
             EVIDENCE_SCHEMA_V13,
             EVIDENCE_SCHEMA_V14,
+            EVIDENCE_SCHEMA_V15,
         }:
             return None
         identity = evidence["authoring_probe"]["runtime"]["identity"]
@@ -3343,6 +3346,10 @@ def validate_artifacts(
         return _validate_v11_artifacts(
             repo_root, record, schema=EVIDENCE_SCHEMA_V14
         )
+    if schema == EVIDENCE_SCHEMA_V15:
+        return _validate_v11_artifacts(
+            repo_root, record, schema=EVIDENCE_SCHEMA_V15
+        )
     raise ProviderFreeError("unknown evidence schema")
 
 
@@ -3375,24 +3382,25 @@ def _validate_v11_artifacts(
         "final",
         "client_transport",
     }
-    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}:
+    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14, EVIDENCE_SCHEMA_V15}:
         required.add("observation_gate")
-    if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}:
+    if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14, EVIDENCE_SCHEMA_V15}:
         required.add("target_section_observation")
-    if schema == EVIDENCE_SCHEMA_V14:
+    if schema in {EVIDENCE_SCHEMA_V14, EVIDENCE_SCHEMA_V15}:
         required.add("draft_evaluation")
     if (
         not isinstance(evidence, dict)
         or set(evidence) != required
         or evidence.get("schema") != schema
         or evidence.get("identity") != expected_identity(record)
-        or evidence.get("scenario") != SCENARIO
+        or evidence.get("scenario") != record.get("scenario")
+        or evidence.get("scenario") not in {SCENARIO, EXHAUSTION_SCENARIO}
         or evidence.get("gate_passed") is not True
         or evidence.get("workspace_validation") is not True
     ):
         raise ProviderFreeError("invalid v11 evidence shape")
     if manifest != {
-        "schema": f"text-to-cad.provider-free-artifact-manifest/{14 if schema == EVIDENCE_SCHEMA_V14 else 13 if schema == EVIDENCE_SCHEMA_V13 else 12 if schema == EVIDENCE_SCHEMA_V12 else 11}",
+        "schema": f"text-to-cad.provider-free-artifact-manifest/{15 if schema == EVIDENCE_SCHEMA_V15 else 14 if schema == EVIDENCE_SCHEMA_V14 else 13 if schema == EVIDENCE_SCHEMA_V13 else 12 if schema == EVIDENCE_SCHEMA_V12 else 11}",
         "final_status": 0,
         "identity": expected_identity(record),
         "evidence": {"path": evidence_path.name},
@@ -3428,26 +3436,31 @@ def _validate_v11_artifacts(
         or local.get("budgets") != expected_limits
         or local.get("start_attempt_permitted") is not False
         or local.get("select_and_finalize_permitted") is not True
-        or cycle.get("completed_cycles") != 10
-        or cycle.get("remaining_cycles") != 0
-        or cycle.get("attempts_per_intended_step") != 3
-        or cycle.get("tool_failures_per_intended_step") != 2
-        or cycle.get("start_attempt_permitted") is not False
+        or schema != EVIDENCE_SCHEMA_V15 and cycle.get("completed_cycles") != 10
+        or schema != EVIDENCE_SCHEMA_V15 and cycle.get("remaining_cycles") != 0
+        or schema != EVIDENCE_SCHEMA_V15 and cycle.get("attempts_per_intended_step") != 3
+        or schema != EVIDENCE_SCHEMA_V15 and cycle.get("tool_failures_per_intended_step") != 2
+        or schema != EVIDENCE_SCHEMA_V15 and cycle.get("start_attempt_permitted") is not False
     ):
         raise ProviderFreeError("invalid v11 budget truth evidence")
-    for transport in (
+    if schema == EVIDENCE_SCHEMA_V15 and cycle != {
+        "skipped": True,
+        "reason": "explicit exhaustion scenario only",
+    }:
+        raise ProviderFreeError("invalid v15 exhaustion marker")
+    transports = (
         evidence["client_transport"],
         after_c.get("transport"),
         local.get("transport"),
-        cycle.get("transport"),
-    ):
+    ) + (() if schema == EVIDENCE_SCHEMA_V15 else (cycle.get("transport"),))
+    for transport in transports:
         if transport != {
             "schema": "text-to-cad.client-transport-evidence/1",
             "transport": "stdin_heredoc",
             "exit_status": 0,
             "response_schema": (
                 "mesh-to-cad.agent-response/7"
-                if schema == EVIDENCE_SCHEMA_V14
+                if schema in {EVIDENCE_SCHEMA_V14, EVIDENCE_SCHEMA_V15}
                 else "mesh-to-cad.agent-response/6"
             ),
             "intent": "workspace_status",
@@ -3524,7 +3537,7 @@ def _validate_v11_artifacts(
         )
     ):
         raise ProviderFreeError("v11 module provenance is invalid")
-    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}:
+    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14, EVIDENCE_SCHEMA_V15}:
         gate = evidence["observation_gate"]
         if (
             not isinstance(gate, dict)
@@ -3585,7 +3598,7 @@ def _validate_v11_artifacts(
         historical_observation = gate["historical_observation"]
         observation_schema = (
             "mesh-to-cad.target-section-observation/3"
-            if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}
+            if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14, EVIDENCE_SCHEMA_V15}
             else "mesh-to-cad.target-section-observation/2"
         )
         if (
@@ -3606,7 +3619,7 @@ def _validate_v11_artifacts(
             sys.path.insert(0, os.fspath(meshscope_src))
         from meshscope import target_section_profile
 
-        if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}:
+        if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14, EVIDENCE_SCHEMA_V15}:
             from meshscope.voxblame import read_surface_tree
 
             authority = lambda step, item: _authority_target_section_v3(
@@ -3634,7 +3647,7 @@ def _validate_v11_artifacts(
             target_section_profile,
         ):
             raise ProviderFreeError("V12 observation differs from committed authority")
-        if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}:
+        if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14, EVIDENCE_SCHEMA_V15}:
             section = evidence["target_section_observation"]
             if (
                 not isinstance(section, dict)
@@ -3733,7 +3746,7 @@ def _validate_v11_artifacts(
                 )
             ):
                 raise ProviderFreeError("v13 Target Section leaked private detail")
-    if schema == EVIDENCE_SCHEMA_V14:
+    if schema in {EVIDENCE_SCHEMA_V14, EVIDENCE_SCHEMA_V15}:
         draft = evidence["draft_evaluation"]
         expected_keys = {
             "schema", "attempts", "admitted", "successful",
@@ -3838,7 +3851,7 @@ def _validate_v11_artifacts(
         )
     ):
         raise ProviderFreeError("v11 evidence leaked private detail")
-    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14} and any(
+    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14, EVIDENCE_SCHEMA_V15} and any(
         token in public_text
         for token in (
             '"handle"',
@@ -3857,6 +3870,7 @@ def _validate_v11_artifacts(
 
 def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, environ: Mapping[str, str]) -> int:
     identity = expected_identity(record)
+    run_exhaustion_probe = record.get("scenario") == EXHAUSTION_SCENARIO
     try:
         receipt = installed.assert_current_authority(
             {**record, "scenario": installed.SCENARIO, "object": installed.SCENARIO}, host_home
@@ -4210,15 +4224,19 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             "same_claim_reused": True,
             "finalized": True,
         }
-        cycle_exhaustion = _run_cycle_exhaustion_probe(
-            exp_dir / "run/cycle-exhaustion-workspace",
-            cycle_fixture,
-            trusted=trusted,
-            published_rebuild=published_rebuild,
-            published_geometry=published_geometry,
-            registry=registry,
-            sidecar=sidecar,
-            candidate_runtime=candidate_lease.runtime,
+        cycle_exhaustion = (
+            _run_cycle_exhaustion_probe(
+                exp_dir / "run/cycle-exhaustion-workspace",
+                cycle_fixture,
+                trusted=trusted,
+                published_rebuild=published_rebuild,
+                published_geometry=published_geometry,
+                registry=registry,
+                sidecar=sidecar,
+                candidate_runtime=candidate_lease.runtime,
+            )
+            if run_exhaustion_probe
+            else {"skipped": True, "reason": "explicit exhaustion scenario only"}
         )
         final_root = exp_dir / "final"
         final_manifest = json.loads((final_root / "manifest.json").read_text(encoding="utf-8"))
@@ -4346,9 +4364,9 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             "cycle_exhaustion": cycle_exhaustion,
         }
         evidence = {
-            "schema": EVIDENCE_SCHEMA_V14,
+            "schema": EVIDENCE_SCHEMA_V14 if run_exhaustion_probe else EVIDENCE_SCHEMA_V15,
             "identity": identity,
-            "scenario": SCENARIO,
+            "scenario": record["scenario"],
             "gate_passed": True,
             "budget_truth": budget_truth,
             "selection": {
@@ -4392,7 +4410,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         _json(
             artifact_manifest_path,
             {
-                "schema": "text-to-cad.provider-free-artifact-manifest/14",
+                "schema": "text-to-cad.provider-free-artifact-manifest/14" if run_exhaustion_probe else "text-to-cad.provider-free-artifact-manifest/15",
                 "final_status": 0,
                 "identity": identity,
                 "evidence": {"path": evidence_path.name},
