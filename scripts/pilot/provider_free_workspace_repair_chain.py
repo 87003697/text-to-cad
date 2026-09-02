@@ -3516,17 +3516,18 @@ def _validate_v11_artifacts(
         or final_manifest.get("selected_step") != selection.get("selected_step")
     ):
         raise ProviderFreeError("v11 final stop reason or identity is invalid")
-    exhaustion_root = exp_dir / "run/cycle-exhaustion-workspace"
-    exhaustion_index = json.loads(
-        (exhaustion_root / "step_index.json").read_text(encoding="utf-8")
-    )
-    if (
-        exhaustion_index.get("budget", {}).get("completed_cycles") != 10
-        or exhaustion_index.get("budget", {}).get("remaining_cycles") != 0
-        or len(list((exhaustion_root / "cycles").glob("*/cycle.json"))) != 10
-        or not runner._workspace_status_available(exhaustion_root)
-    ):
-        raise ProviderFreeError("v11 cycle exhaustion fixture is not authority-backed")
+    if record.get("scenario") == EXHAUSTION_SCENARIO:
+        exhaustion_root = exp_dir / "run/cycle-exhaustion-workspace"
+        exhaustion_index = json.loads(
+            (exhaustion_root / "step_index.json").read_text(encoding="utf-8")
+        )
+        if (
+            exhaustion_index.get("budget", {}).get("completed_cycles") != 10
+            or exhaustion_index.get("budget", {}).get("remaining_cycles") != 0
+            or len(list((exhaustion_root / "cycles").glob("*/cycle.json"))) != 10
+            or not runner._workspace_status_available(exhaustion_root)
+        ):
+            raise ProviderFreeError("v11 cycle exhaustion fixture is not authority-backed")
     modules = evidence["module_paths"]
     if (
         modules.get("product_root") != "skills"
