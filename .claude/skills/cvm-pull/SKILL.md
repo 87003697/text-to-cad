@@ -17,6 +17,21 @@ scripts/pilot/cvm-pull.sh \
   [--include-byproducts [--retain-cvm-source] | --discard-postmortem]
 ```
 
+To recover public handles without qualifying, archiving, transferring, or
+cleaning anything, use the read-only listing mode:
+
+```bash
+scripts/pilot/cvm-pull.sh --list --group <group>
+```
+
+`--list` requires `--group` and cannot be combined with an experiment handle
+or a publication policy. It prints only canonical, sorted `<group>/<exp>`
+handles, one per line, and prints nothing when the group has no public
+experiments. Supervisor-private `.agent-*` directories are excluded from both
+group and global public discovery; every other unsafe discovered name still
+fails closed. Listing does not require `rclone` and performs no qualification,
+archiving, S3 operation, materialization, cleanup, or local file write.
+
 The command performs one transaction per experiment:
 
 1. Read the completed CVM experiment and its Workspace terminal evidence or

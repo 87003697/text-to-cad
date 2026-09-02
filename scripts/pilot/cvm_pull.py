@@ -76,6 +76,7 @@ class PullRequest:
     exp: str | None
     group: str | None
     postmortem_policy: PostmortemPolicy
+    list_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -214,7 +215,8 @@ def parse_request(argv: Sequence[str]) -> PullRequest:
     parser = argparse.ArgumentParser(
         prog="scripts/pilot/cvm-pull.sh",
         usage=(
-            "%(prog)s [--exp <group>/<exp> | --group <group>] "
+            "%(prog)s [--list --group <group> | "
+            "--exp <group>/<exp> | --group <group>] "
             "[--include-byproducts [--retain-cvm-source] "
             "| --discard-postmortem]"
         ),
@@ -222,11 +224,28 @@ def parse_request(argv: Sequence[str]) -> PullRequest:
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--exp")
     scope.add_argument("--group")
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_only",
+        help="list public CVM handles for --group without qualification or writes",
+    )
     policy = parser.add_mutually_exclusive_group()
     policy.add_argument("--include-byproducts", action="store_true")
     policy.add_argument("--discard-postmortem", action="store_true")
     parser.add_argument("--retain-cvm-source", action="store_true")
     args = parser.parse_args(argv)
+    if args.list_only and args.group is None:
+        parser.error("--list requires --group")
+    if args.list_only and (
+        args.exp is not None
+        or args.include_byproducts
+        or args.discard_postmortem
+        or args.retain_cvm_source
+    ):
+        parser.error(
+            "--list is only valid with --group and cannot be combined with pull policies"
+        )
     if args.exp is not None and not is_safe_exp(args.exp):
         raise PullError(f"Unsafe --exp handle: {args.exp}", 7)
     if args.group is not None and not is_safe_component(args.group):
@@ -249,6 +268,7 @@ def parse_request(argv: Sequence[str]) -> PullRequest:
     return PullRequest(
         exp=args.exp,
         group=args.group,
+        list_only=args.list_only,
         postmortem_policy=postmortem_policy,
     )
 
@@ -348,6 +368,9 @@ class CvmPull:
                     len(line.split("/")) == 2
                     and line.split("/", 1)[1] == INTERNAL_TERMINAL_DIR
                 )
+                and not any(
+                    part.startswith(".agent-") for part in line.split("/")
+                )
             )
         )
         unsafe = [value for value in values if not is_safe_exp(value)]
@@ -365,12 +388,14 @@ class CvmPull:
                 f"find ~/text-to-cad/outputs/{self.request.group}/ "
                 "-mindepth 1 -maxdepth 1 -type d "
                 "! -name '.internal-terminal-validation' "
+                "! -name '.agent-*' "
                 f"-printf '{self.request.group}/%f\\n' 2>/dev/null"
             )
         else:
             command = (
                 "find ~/text-to-cad/outputs/ -mindepth 2 -maxdepth 2 "
                 "-type d ! -name '.internal-terminal-validation' "
+                "! -name '.agent-*' "
                 '-printf "%P\\n" 2>/dev/null'
             )
         result = self.runner.remote(command, check=False)
@@ -382,7 +407,8 @@ class CvmPull:
     def discover_candidates(self) -> tuple[str, ...]:
         """Module 2: discover scoped CVM experiments."""
 
-        self._require_rclone()
+        if not self.request.list_only:
+            self._require_rclone()
         return self._discover_cvm_exps()
 
     def _inspect_exp(self, exp: str) -> ExpInspection:
@@ -848,6 +874,10 @@ print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
         """Compose the six modules into the complete pull workflow."""
 
         cvm_exps = self.discover_candidates()
+        if self.request.list_only:
+            for exp in cvm_exps:
+                print(exp)
+            return
         if not cvm_exps:
             print("No exp on CVM. Nothing to do.")
             return
