@@ -169,6 +169,11 @@ def _native_call(body: object) -> dict[str, object]:
             return result
     elif isinstance(output, dict):
         payload = output
+    elif isinstance(output, list) and len(output) == 1 and isinstance(output[0], dict) and output[0].get("type") in {"input_text", "text"} and isinstance(output[0].get("text"), str) and len(output[0]["text"]) <= 4096:
+        try:
+            payload = json.loads(output[0]["text"])
+        except json.JSONDecodeError:
+            return result
     else:
         return result
     if not isinstance(payload, dict) or set(payload) != {"isError", "structuredContent", "content"} or type(payload.get("isError")) is not bool or payload.get("isError") is not True:
