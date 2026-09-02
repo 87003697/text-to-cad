@@ -1826,9 +1826,11 @@ def persist_agent_reconstruction_spec(
     if not enabled:
         return workload_status
     try:
+        destination = exp_dir / RECONSTRUCTION_SPEC_RELATIVE
+        destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(
             candidate_root / "reconstruction-spec.json",
-            exp_dir / RECONSTRUCTION_SPEC_RELATIVE,
+            destination,
         )
     except OSError as exc:
         print(f"pilot-runner: cannot persist Reconstruction Spec: {exc}", file=sys.stderr)
