@@ -363,11 +363,8 @@ class _CanonicalBuildRequest:
 
     The request carries no argv, entrypoint, environment, tool source, or
     output-directory selection; those are all fixed by the supervisor
-    itself when the request is executed.  The Attempt id is the only
-    piece of scope, and it never leaves the trusted boundary.
+    itself when the request is executed.
     """
-
-    attempt_id: int
 
 
 @dataclass(frozen=True)
@@ -2335,7 +2332,7 @@ class WorkspaceSupervisor:
         if bundle.remaining_invocations <= 0:
             raise SupervisorError("budget_violation")
         bundle.remaining_invocations -= 1
-        return _CanonicalBuildRequest(attempt_id=context.attempt_id)
+        return _CanonicalBuildRequest()
 
     def _candidate_path(
         self,
