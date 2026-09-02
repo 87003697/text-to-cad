@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from typing import Any, Mapping, Sequence
 
 from scripts.pilot import plugin_deployment, provider_free_installed_plugin as installed, runner
@@ -42,6 +43,7 @@ EVIDENCE_SCHEMA_V10 = "text-to-cad.provider-free-workspace-repair-chain-evidence
 EVIDENCE_SCHEMA_V11 = "text-to-cad.provider-free-workspace-repair-chain-evidence/11"
 EVIDENCE_SCHEMA_V12 = "text-to-cad.provider-free-workspace-repair-chain-evidence/12"
 EVIDENCE_SCHEMA_V13 = "text-to-cad.provider-free-workspace-repair-chain-evidence/13"
+EVIDENCE_SCHEMA_V14 = "text-to-cad.provider-free-workspace-repair-chain-evidence/14"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
@@ -52,7 +54,7 @@ REPAIR_C_WIDTH = 3 / 4
 SPEC_FINAL_BYTES = b'{"revision":"updated","semantic_regions":[]}\n'
 MCP_PERMITTED_INTENTS = frozenset({
     "workspace_status", "start_attempt", "run_candidate_tool", "submit_step_zero",
-    "submit_repair", "inspect_formal_preview", "inspect_repair_targets",
+    "submit_repair", "evaluate_repair_draft", "abandon_repair_attempt", "inspect_formal_preview", "inspect_repair_targets",
     "observe_target_section", "select_and_finalize", "observe_reference",
 })
 
@@ -121,6 +123,7 @@ def authoring_python_from_evidence(
             EVIDENCE_SCHEMA_V11,
             EVIDENCE_SCHEMA_V12,
             EVIDENCE_SCHEMA_V13,
+            EVIDENCE_SCHEMA_V14,
         }:
             return None
         identity = evidence["authoring_probe"]["runtime"]["identity"]
@@ -397,10 +400,10 @@ def _spec(path: Path, region_id: str, bounds: Mapping[str, Any]) -> bytes:
 def _surface_call(socket_path: Path, request: Mapping[str, Any]) -> dict[str, Any]:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
         conn.connect(os.fspath(socket_path))
-        stream = conn.makefile("rwb")
-        stream.write(json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n")
-        stream.flush()
-        response = json.loads(stream.readline())
+        with conn.makefile("rwb") as stream:
+            stream.write(json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n")
+            stream.flush()
+            response = json.loads(stream.readline())
     if not isinstance(response, dict):
         raise ProviderFreeError("Agent Surface bridge returned invalid response")
     return response
@@ -437,7 +440,7 @@ class _FailedObservationWriteBridge(AgentSurfaceBridge):
         self._fail_observation_write = False
         result = response.get("result")
         self.valid_observation_frame = (
-            response.get("schema") == "mesh-to-cad.agent-response/6"
+            response.get("schema") == "mesh-to-cad.agent-response/7"
             and isinstance(result, dict)
             and result.get("schema")
             == "mesh-to-cad.target-section-observation/3"
@@ -478,6 +481,63 @@ def _fail_observation_response_write(
     }
 
 
+class _FailedSubmitWriteBridge(AgentSurfaceBridge):
+    """Coordinate one lost submit response after W4 cached publication."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._fail_submit_write = False
+        self.write_started = threading.Event()
+        self.client_closed = threading.Event()
+        self.write_failed = threading.Event()
+
+    def arm_submit_write_failure(self) -> None:
+        self._fail_submit_write = True
+        self.write_started.clear()
+        self.client_closed.clear()
+        self.write_failed.clear()
+
+    def _write(self, stream: Any, value: dict[str, Any]) -> None:
+        response = value.get("response") if value.get("ok") is True else None
+        if not (
+            self._fail_submit_write
+            and isinstance(response, dict)
+            and response.get("schema") == "mesh-to-cad.agent-response/7"
+            and response.get("intent") == "submit_repair"
+            and isinstance(response.get("result"), dict)
+            and response["result"].get("state") == "published"
+        ):
+            super()._write(stream, value)
+            return
+        self._fail_submit_write = False
+        self.write_started.set()
+        if not self.client_closed.wait(timeout=10):
+            raise ProviderFreeError("lost-submit client did not disconnect")
+        try:
+            super()._write(stream, value)
+        except OSError:
+            self.write_failed.set()
+            raise
+
+
+def _lose_submit_response(
+    bridge: _FailedSubmitWriteBridge, request: Mapping[str, Any]
+) -> None:
+    bridge.arm_submit_write_failure()
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        conn.connect(os.fspath(bridge.socket_path))
+        conn.sendall(json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n")
+        if not bridge.write_started.wait(timeout=10):
+            raise ProviderFreeError("published submit did not reach response write")
+        conn.shutdown(socket.SHUT_RDWR)
+    finally:
+        conn.close()
+        bridge.client_closed.set()
+    if not bridge.write_failed.wait(timeout=10):
+        raise ProviderFreeError("submit response write did not fail")
+
+
 def _workspace_status_via_client(
     client_path: Path, socket_path: Path, workspace_handle: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -515,7 +575,7 @@ def _workspace_status_via_client(
         completed.returncode != 0
         or not isinstance(response, dict)
         or set(response) != {"schema", "intent", "result"}
-        or response.get("schema") != "mesh-to-cad.agent-response/6"
+        or response.get("schema") != "mesh-to-cad.agent-response/7"
         or response.get("intent") != "workspace_status"
         or not isinstance(response.get("result"), dict)
     ):
@@ -687,23 +747,6 @@ def _run_cycle_exhaustion_probe(
                 candidate_root / "work/source/model.py",
                 REPAIR_B_WIDTH + cycle / 100,
             )
-            cycle_run = _surface_call(
-                bridge.socket_path,
-                {
-                    "schema": "mesh-to-cad.agent-intent/1",
-                    "intent": "run_candidate_tool",
-                    "args": {
-                        "workspace_handle": workspace_handle,
-                        "attempt_handle": attempt["attempt_handle"],
-                        "candidate_handle": attempt["candidate_handle"],
-                        "operation_handle": attempt["capability_bundle_handle"],
-                    },
-                },
-            )["response"]["result"]
-            if cycle_run.get("state") != "completed":
-                raise ProviderFreeError(
-                    f"cycle exhaustion Repair {cycle} build failed"
-                )
             _json(
                 candidate_root / "work/assessment.json",
                 {
@@ -714,6 +757,24 @@ def _run_cycle_exhaustion_probe(
                     "summary": "Published one real cycle for authority exhaustion.",
                 },
             )
+            evaluated = _surface_call(
+                bridge.socket_path,
+                {
+                    "schema": "mesh-to-cad.agent-intent/1",
+                    "intent": "evaluate_repair_draft",
+                    "args": {
+                        "workspace_handle": workspace_handle,
+                        "attempt_handle": attempt["attempt_handle"],
+                        "candidate_handle": attempt["candidate_handle"],
+                        "evaluation_ticket": attempt["evaluation_ticket"],
+                    },
+                },
+            )["response"]["result"]
+            draft_handle = evaluated.get("draft_handle")
+            if evaluated.get("state") != "evaluated" or not isinstance(draft_handle, str):
+                raise ProviderFreeError(
+                    f"cycle exhaustion Repair {cycle} draft evaluation failed"
+                )
             current = _surface_call(
                 bridge.socket_path,
                 {
@@ -722,7 +783,7 @@ def _run_cycle_exhaustion_probe(
                     "args": {
                         "workspace_handle": workspace_handle,
                         "attempt_handle": attempt["attempt_handle"],
-                        "candidate_handle": attempt["candidate_handle"],
+                        "draft_handle": draft_handle,
                     },
                 },
             )["response"]["result"]
@@ -833,7 +894,7 @@ def _inspect(socket_path: Path, handle: str, expected: bytes) -> dict[str, Any]:
         raise ProviderFreeError("MCP preview text is invalid") from exc
     if parsed_text != structured:
         raise ProviderFreeError("MCP preview text does not match structured content")
-    if not isinstance(structured, dict) or set(structured) != {"schema", "intent", "result"} or structured.get("schema") != "mesh-to-cad.agent-response/6" or structured.get("intent") != "inspect_formal_preview" or not isinstance(structured.get("result"), dict) or set(structured["result"]) != {"state", "preview_handle", "permitted_next_intents"} or structured["result"].get("state") != "available" or structured["result"].get("preview_handle") != handle or not isinstance(structured["result"].get("permitted_next_intents"), list) or any(type(item) is not str or item not in MCP_PERMITTED_INTENTS for item in structured["result"]["permitted_next_intents"]):
+    if not isinstance(structured, dict) or set(structured) != {"schema", "intent", "result"} or structured.get("schema") != "mesh-to-cad.agent-response/7" or structured.get("intent") != "inspect_formal_preview" or not isinstance(structured.get("result"), dict) or set(structured["result"]) != {"state", "preview_handle", "permitted_next_intents"} or structured["result"].get("state") != "available" or structured["result"].get("preview_handle") != handle or not isinstance(structured["result"].get("permitted_next_intents"), list) or any(type(item) is not str or item not in MCP_PERMITTED_INTENTS for item in structured["result"]["permitted_next_intents"]):
         raise ProviderFreeError("MCP preview envelope is invalid")
     return {"initialize_id": initialized.get("id"), "tools_list_id": listed.get("id"), "call_id": result.get("id"), "tools": 1, "content_types": [item.get("type") for item in content], "image_bytes": len(expected), "text_present": True, "handle_bound": True}
 
@@ -844,6 +905,93 @@ def _public(value: Any) -> str:
     if any(item in text for item in forbidden):
         raise ProviderFreeError("public response leaked forbidden detail")
     return text
+
+
+def _draft_feedback_authority(
+    parent_measurement: Mapping[str, Any], draft_measurement: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Independently project the public Active-frontier draft feedback."""
+
+    def public_kind(item: Mapping[str, Any]) -> str:
+        if item.get("kind") == "exterior":
+            return "exterior"
+        profile = item.get("error_profile")
+        if not isinstance(profile, Mapping):
+            raise ProviderFreeError("draft feedback target profile is invalid")
+        if profile.get("missing_surface_count") == 1 and profile.get("excess_surface_count") == 0:
+            return "missing"
+        if profile.get("missing_surface_count") == 0 and profile.get("excess_surface_count") == 1:
+            return "excess"
+        raise ProviderFreeError("draft feedback target polarity is invalid")
+
+    def frontier(measurement: Mapping[str, Any]) -> tuple[dict[str, int], list[dict[str, Any]]]:
+        errors = measurement.get("errors_by_depth")
+        if not isinstance(errors, list):
+            raise ProviderFreeError("draft feedback depth authority is invalid")
+        active = next(
+            (
+                item
+                for item in errors
+                if isinstance(item, Mapping)
+                and isinstance(item.get("surface_error_count"), int)
+                and item["surface_error_count"] > 0
+            ),
+            None,
+        )
+        counts = {
+            "missing_surface_count": 0 if active is None else active["missing_surface_count"],
+            "excess_surface_count": 0 if active is None else active["excess_surface_count"],
+        }
+        target_document = measurement.get("repair_targets")
+        raw_items = target_document.get("ordered_targets") if isinstance(target_document, Mapping) else None
+        if not isinstance(raw_items, list):
+            raise ProviderFreeError("draft feedback target authority is invalid")
+        if any(not isinstance(item, Mapping) for item in raw_items):
+            raise ProviderFreeError("draft feedback target item is invalid")
+        items = [
+            {"kind": public_kind(item), "bounds_canonical": item["bounds_canonical"]}
+            for item in raw_items
+            if item.get("kind") != "exterior"
+        ]
+        return counts, items
+
+    before, before_items = frontier(parent_measurement)
+    after, after_items = frontier(draft_measurement)
+
+    def identity(item: Mapping[str, Any]) -> str:
+        return json.dumps(item, sort_keys=True, separators=(",", ":"))
+
+    before_ids = {identity(item) for item in before_items}
+    after_ids = {identity(item) for item in after_items}
+
+    def section(items: list[dict[str, Any]]) -> dict[str, Any]:
+        returned = items[:8]
+        return {"total": len(items), "returned": len(returned), "remaining": len(items) - len(returned), "items": returned}
+
+    return {
+        "schema": "mesh-to-cad.repair-draft-feedback/1",
+        "before": before,
+        "after": after,
+        "delta": {key: after[key] - before[key] for key in before},
+        "target_change_preview": {
+            "resolved": section([item for item in before_items if identity(item) not in after_ids]),
+            "persisted": section([item for item in before_items if identity(item) in after_ids]),
+            "new": section([item for item in after_items if identity(item) not in before_ids]),
+        },
+    }
+
+
+def _committed_authority_snapshot(workspace: Path) -> dict[str, bytes]:
+    snapshot: dict[str, bytes] = {}
+    for relative in ("steps", "cycles", "final"):
+        root = workspace / relative
+        if root.is_dir():
+            for path in sorted(item for item in root.rglob("*") if item.is_file()):
+                snapshot[path.relative_to(workspace).as_posix()] = path.read_bytes()
+    index = workspace / "voxblame/index.json"
+    if index.is_file():
+        snapshot["voxblame/index.json"] = index.read_bytes()
+    return snapshot
 
 
 def _read_target_page(socket_path: Path, step_handle: str, offset: int) -> dict[str, Any]:
@@ -860,7 +1008,7 @@ def _read_target_page(socket_path: Path, step_handle: str, offset: int) -> dict[
     if (
         not isinstance(response, dict)
         or set(response) != {"schema", "intent", "result"}
-        or response.get("schema") != "mesh-to-cad.agent-response/6"
+        or response.get("schema") != "mesh-to-cad.agent-response/7"
         or response.get("intent") != "inspect_repair_targets"
         or not isinstance(response.get("result"), dict)
     ):
@@ -882,7 +1030,7 @@ def _read_target_section(socket_path: Path, step_handle: str, rank: int) -> dict
     if (
         not isinstance(response, dict)
         or set(response) != {"schema", "intent", "result"}
-        or response.get("schema") != "mesh-to-cad.agent-response/6"
+        or response.get("schema") != "mesh-to-cad.agent-response/7"
         or response.get("intent") != "observe_target_section"
         or not isinstance(response.get("result"), dict)
     ):
@@ -2517,6 +2665,608 @@ def _validate_authoring_probe(
         raise ProviderFreeError("v6 authoring build version mismatch")
 
 
+def _run_draft_evaluation_probe(
+    workspace: Path,
+    fixture: Path,
+    *,
+    trusted: Path,
+    published_rebuild: Path,
+    published_geometry: Path,
+    registry: Path,
+    sidecar: Any,
+    candidate_runtime: Path,
+) -> dict[str, Any]:
+    """Exercise the V14 Repair draft contract over the real socket."""
+
+    runner.prepare_exp(workspace)
+    runner.prepare_and_initialize_workspace(workspace, fixture, trusted_tools_root=trusted)
+    candidate_root = workspace.parent / f".agent-candidate-draft-{os.getpid()}"
+    counters = {"repair_builds": 0, "provider_calls": 0}
+    first_evaluation_ready = threading.Event()
+    release_first_evaluation = threading.Event()
+
+    def repair_provider(request: Any) -> None:
+        counters["provider_calls"] += 1
+        if counters["provider_calls"] == 4:
+            raise RuntimeError("admitted provider failure")
+        runner.real_repair_evidence_provider(
+            request,
+            capability_path=sidecar.capability_dir / "runtime.json",
+            meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src",
+            meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src",
+        )
+        if counters["provider_calls"] == 1:
+            first_evaluation_ready.set()
+            if not release_first_evaluation.wait(timeout=10):
+                raise RuntimeError("in-flight abandonment probe timed out")
+
+    supervisor = WorkspaceSupervisor(
+        workspace,
+        bind_reference=True,
+        candidate_root=candidate_root,
+        rebuild_entrypoint=published_rebuild,
+        geometry_entrypoint=published_geometry,
+        tool_registry=registry,
+        browser_runtime_capability=sidecar.capability_dir / "runtime.json",
+        candidate_runtime=candidate_runtime,
+        trusted_tools_root=trusted,
+        trusted_product_root=trusted,
+        reconstruction_spec=True,
+        step_zero_evidence_provider=lambda request: runner.real_step_zero_evidence_provider(
+            request,
+            capability_path=sidecar.capability_dir / "runtime.json",
+            meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src",
+            meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src",
+        ),
+        repair_evidence_provider=repair_provider,
+    )
+    canonical_build = supervisor._build_canonical_candidate
+
+    def counted_build(context: Any) -> Any:
+        if context.intended_step > 0:
+            counters["repair_builds"] += 1
+        return canonical_build(context)
+
+    supervisor._build_canonical_candidate = counted_build
+    socket_root = Path(tempfile.mkdtemp(prefix="ttc-draft-", dir="/tmp"))
+    bridge = _FailedSubmitWriteBridge(
+        supervisor.agent_surface(),
+        socket_root / "surface.sock",
+        trusted_product_root=trusted,
+    )
+
+    def call(intent: str, args: Mapping[str, Any]) -> dict[str, Any]:
+        frame = _surface_call(
+            bridge.socket_path,
+            {"schema": "mesh-to-cad.agent-intent/1", "intent": intent, "args": dict(args)},
+        )
+        _public(frame)
+        response = frame.get("response") if frame.get("ok") is True else None
+        if not isinstance(response, dict) or response.get("schema") != "mesh-to-cad.agent-response/7":
+            raise ProviderFreeError(f"draft probe {intent} failed")
+        return response["result"]
+
+    try:
+        bridge.start()
+        bootstrap = supervisor.agent_bootstrap_contract()
+        wh = bootstrap["workspace_handle"]
+        ph = bootstrap["plan_handle"]
+        plan = candidate_root / "plan.json"
+        _json(plan, {"schema": "mesh-to-cad.initial-plan/1", "summary": "draft evaluation probe"})
+        started0 = call("start_attempt", {"workspace_handle": wh, "plan_handle": ph})
+        _source(candidate_root / "work/source/model.py", STEP_ZERO_WIDTH)
+        call("run_candidate_tool", {"workspace_handle": wh, "attempt_handle": started0["attempt_handle"], "candidate_handle": started0["candidate_handle"], "operation_handle": started0["capability_bundle_handle"]})
+        step0 = call("submit_step_zero", {"workspace_handle": wh, "attempt_handle": started0["attempt_handle"], "candidate_handle": started0["candidate_handle"]})
+        drain = _run_draft_drain_probe(
+            workspace,
+            trusted=trusted,
+            published_rebuild=published_rebuild,
+            published_geometry=published_geometry,
+            registry=registry,
+            sidecar=sidecar,
+            candidate_runtime=candidate_runtime,
+        )
+        page = _read_target_page(bridge.socket_path, step0["step_handle"], 0)
+        if not page["items"]:
+            raise ProviderFreeError("draft probe Step 0 has no public target")
+        target = page["items"][0]
+        _spec(candidate_root / "reconstruction-spec.json", "component.primary", target["bounds_canonical"])
+        _json(plan, {"schema": "voxblame.repair-batch/1", "from_step": 0, "selected_targets": [target], "planned_edits": [{"edit_key": "draft-probe", "target_ranks": [target["rank"]], "spec_region_id": "component.primary", "description": "compare immutable Repair drafts"}], "rationale": "exercise the bounded draft evaluator", "preview_observation": "Step 0 preview and target were inspected"})
+        committed_before = _committed_authority_snapshot(workspace)
+
+        attempt1 = call("start_attempt", {"workspace_handle": wh, "plan_handle": ph, "parent_step_handle": step0["step_handle"]})
+        if attempt1["draft_budget"] != {"used": 0, "remaining": 8, "maximum": 8}:
+            raise ProviderFreeError("draft budget did not start at eight")
+        if attempt1["permitted_next_intents"] != ["evaluate_repair_draft", "abandon_repair_attempt", "workspace_status"]:
+            raise ProviderFreeError("Repair start exposed impossible intents")
+        _source(candidate_root / "work/source/model.py", REPAIR_B_WIDTH)
+        _json(candidate_root / "work/assessment.json", {"schema": "mesh-to-cad.assessment/1", "from_step": 0, "to_step": 1, "preview_observation": "Attempt 1 draft underfits the parent.", "summary": "Attempt 1 draft probe."})
+        invalid = call("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt1["attempt_handle"], "candidate_handle": attempt1["candidate_handle"], "evaluation_ticket": "ticket:invalid"})
+        if invalid != {"state": "failed", "classification": "invalid_ticket", "permitted_next_intents": invalid["permitted_next_intents"]}:
+            raise ProviderFreeError("invalid evaluation ticket was admitted")
+        concurrent_results: list[dict[str, Any]] = []
+        concurrent_errors: list[BaseException] = []
+        barrier = threading.Barrier(3)
+
+        def evaluate_same_ticket() -> None:
+            try:
+                barrier.wait()
+                concurrent_results.append(call("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt1["attempt_handle"], "candidate_handle": attempt1["candidate_handle"], "evaluation_ticket": attempt1["evaluation_ticket"]}))
+            except BaseException as error:
+                concurrent_errors.append(error)
+
+        workers = [threading.Thread(target=evaluate_same_ticket) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        barrier.wait()
+        first_evaluation_ready.wait()
+        session1 = supervisor._draft_sessions[1]
+        active_attempts_before_failed_abandon = set(session1.attempts)
+        original_record = supervisor.workspace_api.record_attempt
+        record_failed = False
+
+        def fail_record_once(*args: Any, **kwargs: Any) -> Mapping[str, Any]:
+            nonlocal record_failed
+            if not record_failed:
+                record_failed = True
+                raise RuntimeError("injected record failure")
+            return original_record(*args, **kwargs)
+
+        supervisor.workspace_api.record_attempt = fail_record_once
+        failed_abandon = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "abandon_repair_attempt", "args": {"workspace_handle": wh, "attempt_handle": attempt1["attempt_handle"]}})
+        if (
+            failed_abandon.get("ok") is not False
+            or attempt1["attempt_handle"] not in supervisor.registry._records
+            or set(session1.attempts) != active_attempts_before_failed_abandon
+        ):
+            raise ProviderFreeError("failed abandonment mutated the active Repair session")
+        abandon_results: list[dict[str, Any]] = []
+        abandon_errors: list[BaseException] = []
+
+        def abandon_in_flight() -> None:
+            try:
+                abandon_results.append(call("abandon_repair_attempt", {"workspace_handle": wh, "attempt_handle": attempt1["attempt_handle"]}))
+            except BaseException as error:
+                abandon_errors.append(error)
+
+        abandon_worker = threading.Thread(target=abandon_in_flight)
+        abandon_worker.start()
+        time.sleep(0.2)
+        if not abandon_worker.is_alive() or not any(supervisor._staging_root.glob("draft-*")):
+            raise ProviderFreeError("abandonment did not wait for the in-flight evaluation")
+        release_first_evaluation.set()
+        for worker in workers:
+            worker.join()
+        abandon_worker.join()
+        supervisor.workspace_api.record_attempt = original_record
+        if concurrent_errors or len(concurrent_results) != 2 or concurrent_results[0] != concurrent_results[1] or counters != {"repair_builds": 1, "provider_calls": 1}:
+            raise ProviderFreeError("concurrent evaluation was not single-flight")
+        if abandon_errors or abandon_results != [{"state": "abandoned", "permitted_next_intents": ["start_attempt", "inspect_repair_targets", "select_and_finalize", "workspace_status"]}]:
+            raise ProviderFreeError("in-flight abandonment did not complete")
+        evaluation1 = concurrent_results[0]
+        if evaluation1["permitted_next_intents"] != ["evaluate_repair_draft", "submit_repair", "abandon_repair_attempt", "workspace_status"]:
+            raise ProviderFreeError("successful evaluation intents are not state-derived")
+        replay1 = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "evaluate_repair_draft", "args": {"workspace_handle": wh, "attempt_handle": attempt1["attempt_handle"], "candidate_handle": attempt1["candidate_handle"], "evaluation_ticket": attempt1["evaluation_ticket"]}})
+        if replay1.get("ok") is not False:
+            raise ProviderFreeError("abandoned evaluation handle remained callable")
+        stale_ticket = evaluation1["next_evaluation_ticket"]
+        if any(supervisor._staging_root.glob("draft-*")):
+            raise ProviderFreeError("in-flight draft stage survived abandonment")
+        try:
+            supervisor.registry.resolve(evaluation1["draft_handle"], "draft")
+        except SupervisorError:
+            pass
+        else:
+            raise ProviderFreeError("in-flight draft handle survived abandonment")
+
+        selection = candidate_root / "selection.json"
+        notes = candidate_root / "notes.md"
+        _json(selection, {"schema": "mesh-to-cad.agent-selection-claim/1", "preview_observation": "Step 0 remains unaccepted after draft-only evaluation.", "stop_reason": "no_feasible_strategy", "conflict": False, "conflict_details": None, "rationale": "The draft feedback alone cannot authorize an infeasible stop."})
+        notes.write_text("## Input\n\nProvider-free fixture.\n## Modeling Intent\n\nDraft gate probe.\n## Preserved Structural Features\n\nPrimary box.\n## Omitted Surface Details\n\nResidual surfaces.\n## Repair Trajectory\n\nDraft feedback was evaluated.\n## Final Selection\n\nStep 0 for gate probing.\n## Verification\n\nCommitted measurement only.\n", encoding="utf-8")
+        blocked = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "select_and_finalize", "args": {"workspace_handle": wh, "step_handle": step0["step_handle"], "selection_handle": bootstrap["selection_handle"], "notes_handle": bootstrap["notes_handle"]}})
+        blocked_error = blocked.get("error")
+        if blocked.get("ok") is not False or not isinstance(blocked_error, Mapping) or blocked_error.get("classification") != "state_conflict":
+            raise ProviderFreeError("draft feedback authorized no-feasible finalization")
+        occupancy = _read_target_section(bridge.socket_path, step0["step_handle"], target["rank"])
+
+        attempt2 = call("start_attempt", {"workspace_handle": wh, "plan_handle": ph, "parent_step_handle": step0["step_handle"]})
+        if attempt2["draft_budget"] != {"used": 1, "remaining": 7, "maximum": 8}:
+            raise ProviderFreeError("draft budget did not survive Attempt abandonment")
+        if attempt2["permitted_next_intents"] != ["evaluate_repair_draft", "abandon_repair_attempt", "workspace_status"]:
+            raise ProviderFreeError("second Repair start exposed impossible intents")
+        stale = call("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "candidate_handle": attempt2["candidate_handle"], "evaluation_ticket": stale_ticket})
+        if stale.get("classification") != "stale_ticket":
+            raise ProviderFreeError("abandoned Attempt ticket was not stale")
+
+        _source(candidate_root / "work/source/model.py", REPAIR_A_WIDTH)
+        assessment_a = {"schema": "mesh-to-cad.assessment/1", "from_step": 0, "to_step": 1, "preview_observation": "Draft A expands toward the parent reference.", "summary": "Retain deterministic Draft A."}
+        _json(candidate_root / "work/assessment.json", assessment_a)
+        draft_a = call("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "candidate_handle": attempt2["candidate_handle"], "evaluation_ticket": attempt2["evaluation_ticket"]})
+        draft_a_counts = dict(counters)
+        draft_a_replay = call("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "candidate_handle": attempt2["candidate_handle"], "evaluation_ticket": attempt2["evaluation_ticket"]})
+        if draft_a_replay != draft_a or counters != draft_a_counts:
+            raise ProviderFreeError("completed evaluation ticket did not replay exactly")
+        if draft_a["permitted_next_intents"] != ["evaluate_repair_draft", "submit_repair", "abandon_repair_attempt", "workspace_status"]:
+            raise ProviderFreeError("retained draft did not enable submission")
+        prepared_a = supervisor.registry.resolve(draft_a["draft_handle"], "draft")
+        if not isinstance(prepared_a, Mapping):
+            raise ProviderFreeError("Draft A was not retained")
+        parent_measurement = json.loads((workspace / "voxblame/steps/000000/measurement.json").read_text(encoding="utf-8"))
+        draft_measurement_path = Path(prepared_a["voxblame_step"]) / "measurement.json"
+        draft_measurement = json.loads(draft_measurement_path.read_text(encoding="utf-8"))
+        if draft_a["feedback"] != _draft_feedback_authority(parent_measurement, draft_measurement):
+            raise ProviderFreeError("draft feedback differs from independent authority")
+        response_bytes = len(json.dumps(draft_a["feedback"], sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        frozen_a = {
+            "source": (Path(prepared_a["candidate"]) / "source/model.py").read_bytes(),
+            "mesh": Path(prepared_a["candidate_mesh"]).read_bytes(),
+            "assessment": Path(prepared_a["assessment"]).read_bytes(),
+            "measurement": draft_measurement_path.read_bytes(),
+            "preview_json": (Path(prepared_a["preview"]) / "preview.json").read_bytes(),
+            "preview_png": (Path(prepared_a["preview"]) / "preview.png").read_bytes(),
+            "diff": Path(prepared_a["region_diff"]).read_bytes(),
+            "source_changes": Path(prepared_a["source_changes"]).read_bytes(),
+        }
+
+        original_prepare = supervisor.workspace_api.prepare_repair_draft
+
+        def prepare_with_exterior(*args: Any, **kwargs: Any) -> Mapping[str, Any]:
+            prepared = dict(original_prepare(*args, **kwargs))
+            feedback = json.loads(json.dumps(prepared["feedback"]))
+            feedback["target_change_preview"]["new"] = {
+                "total": 1,
+                "returned": 1,
+                "remaining": 0,
+                "items": [{"kind": "exterior", "bounds_canonical": {"min": [-0.5, -0.5, -0.5], "max": [-0.25, -0.25, -0.25]}}],
+            }
+            prepared["feedback"] = feedback
+            return prepared
+
+        supervisor.workspace_api.prepare_repair_draft = prepare_with_exterior
+        malformed = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "evaluate_repair_draft", "args": {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "candidate_handle": attempt2["candidate_handle"], "evaluation_ticket": draft_a["next_evaluation_ticket"]}})
+        supervisor.workspace_api.prepare_repair_draft = original_prepare
+        if malformed.get("ok") is not False:
+            raise ProviderFreeError("exterior draft feedback was Agent-visible")
+        session2 = supervisor._draft_sessions[1]
+        malformed_entry = session2.tickets[draft_a["next_evaluation_ticket"]]
+        post_malformed_ticket = malformed_entry["result"]["next_evaluation_ticket"]
+
+        _source(candidate_root / "work/source/model.py", REPAIR_C_WIDTH)
+        _json(candidate_root / "work/assessment.json", {"schema": "mesh-to-cad.assessment/1", "from_step": 0, "to_step": 1, "preview_observation": "Draft B differs from retained Draft A.", "summary": "Mutated current candidate B."})
+        failed = call("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "candidate_handle": attempt2["candidate_handle"], "evaluation_ticket": post_malformed_ticket})
+        if failed.get("classification") != "admitted_failure" or failed.get("subtype") != "provider_execution_failed":
+            raise ProviderFreeError("provider failure did not consume one closed draft slot")
+        failed_counts = dict(counters)
+        failed_replay = call("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "candidate_handle": attempt2["candidate_handle"], "evaluation_ticket": post_malformed_ticket})
+        if failed_replay != failed or counters != failed_counts:
+            raise ProviderFreeError("completed evaluation failure did not replay exactly")
+        if failed["permitted_next_intents"] != ["evaluate_repair_draft", "submit_repair", "abandon_repair_attempt", "workspace_status"]:
+            raise ProviderFreeError("admitted failure hid a retained draft")
+        ticket = failed["next_evaluation_ticket"]
+        admitted = 4
+        last = failed
+        while admitted < 8:
+            last = call("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "candidate_handle": attempt2["candidate_handle"], "evaluation_ticket": ticket})
+            admitted += 1
+            ticket = last["next_evaluation_ticket"]
+        if ticket is not None or counters != {"repair_builds": 8, "provider_calls": 8}:
+            raise ProviderFreeError("draft admission budget/count discriminator failed")
+        if last["permitted_next_intents"] != ["submit_repair", "abandon_repair_attempt", "workspace_status"]:
+            raise ProviderFreeError("exhausted draft budget exposed impossible intents")
+        exhausted_invalid = call("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "candidate_handle": attempt2["candidate_handle"], "evaluation_ticket": "ticket:ninth"})
+        if exhausted_invalid.get("classification") != "invalid_ticket":
+            raise ProviderFreeError("a ninth evaluation ticket was admitted")
+        if _committed_authority_snapshot(workspace) != committed_before:
+            raise ProviderFreeError("draft evaluation mutated committed authority")
+        before_submit_counts = dict(counters)
+        original_publish_cycle = supervisor.workspace_api.publish_cycle
+        publish_failed = False
+
+        def fail_publish_cycle_once(*args: Any, **kwargs: Any) -> Mapping[str, Any]:
+            nonlocal publish_failed
+            if not publish_failed:
+                publish_failed = True
+                raise RuntimeError("injected W1 publication failure")
+            return original_publish_cycle(*args, **kwargs)
+
+        supervisor.workspace_api.publish_cycle = fail_publish_cycle_once
+        failed_publish = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "submit_repair", "args": {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "draft_handle": draft_a["draft_handle"]}})
+        retained_after_failure = {
+            "source": (Path(prepared_a["candidate"]) / "source/model.py").read_bytes(),
+            "mesh": Path(prepared_a["candidate_mesh"]).read_bytes(),
+            "assessment": Path(prepared_a["assessment"]).read_bytes(),
+            "measurement": draft_measurement_path.read_bytes(),
+            "preview_json": (Path(prepared_a["preview"]) / "preview.json").read_bytes(),
+            "preview_png": (Path(prepared_a["preview"]) / "preview.png").read_bytes(),
+            "diff": Path(prepared_a["region_diff"]).read_bytes(),
+            "source_changes": Path(prepared_a["source_changes"]).read_bytes(),
+        }
+        if failed_publish.get("ok") is not False or retained_after_failure != frozen_a or supervisor.registry.resolve(draft_a["draft_handle"], "draft") is not prepared_a:
+            raise ProviderFreeError("failed publication did not preserve the prepared draft")
+        supervisor.workspace_api.publish_cycle = original_publish_cycle
+        submit_results: list[dict[str, Any]] = []
+        submit_errors: list[BaseException] = []
+        submit_barrier = threading.Barrier(3)
+
+        def submit_same_draft() -> None:
+            try:
+                submit_barrier.wait()
+                submit_results.append(call("submit_repair", {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "draft_handle": draft_a["draft_handle"]}))
+            except BaseException as error:
+                submit_errors.append(error)
+
+        submit_workers = [threading.Thread(target=submit_same_draft) for _ in range(2)]
+        for worker in submit_workers:
+            worker.start()
+        submit_barrier.wait()
+        for worker in submit_workers:
+            worker.join()
+        if submit_errors or len(submit_results) != 2 or submit_results[0] != submit_results[1]:
+            raise ProviderFreeError("concurrent draft submission was not single-flight")
+        published = submit_results[0]
+        submit_request = {"schema": "mesh-to-cad.agent-intent/1", "intent": "submit_repair", "args": {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "draft_handle": draft_a["draft_handle"]}}
+        _lose_submit_response(bridge, submit_request)
+        lost_response_replay = call("submit_repair", submit_request["args"])
+        if lost_response_replay != published:
+            raise ProviderFreeError("lost draft publication response did not replay")
+        if counters != before_submit_counts or published["decision_facts"]["step_ordinal"] != 1:
+            raise ProviderFreeError("draft submission rebuilt or reran evidence")
+        published_a = {
+            "source": (workspace / "steps/000001/candidate/source/model.py").read_bytes(),
+            "mesh": (workspace / "steps/000001/candidate/candidate.glb").read_bytes(),
+            "assessment": (workspace / "cycles/000001/assessment.json").read_bytes(),
+            "measurement": (workspace / "voxblame/steps/000001/measurement.json").read_bytes(),
+            "preview_json": (workspace / "steps/000001/preview/preview.json").read_bytes(),
+            "preview_png": (workspace / "steps/000001/preview/preview.png").read_bytes(),
+            "diff": (workspace / "cycles/000001/diff.json").read_bytes(),
+            "source_changes": (workspace / "cycles/000001/source_changes.json").read_bytes(),
+        }
+        if published_a != frozen_a or len(list((workspace / "cycles").glob("*/cycle.json"))) != 1:
+            raise ProviderFreeError("published Repair did not equal retained Draft A")
+        revoked = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "evaluate_repair_draft", "args": {"workspace_handle": wh, "attempt_handle": attempt2["attempt_handle"], "candidate_handle": attempt2["candidate_handle"], "evaluation_ticket": last.get("next_evaluation_ticket") or "ticket:spent"}})
+        if revoked.get("ok") is not False:
+            raise ProviderFreeError("completed Attempt capabilities were not revoked")
+        if list((supervisor._staging_root).glob("draft-*")):
+            raise ProviderFreeError("draft stages survived publication")
+        return {
+            "schema": "text-to-cad.repair-draft-evaluation-evidence/1",
+            "attempts": 2,
+            "admitted": 8,
+            "successful": 7,
+            "admitted_failures": 1,
+            "invalid_ticket_consumed": False,
+            "stale_ticket_consumed": False,
+            "completed_ticket_replayed": True,
+            "concurrent_ticket_single_flight": True,
+            "ninth_ticket_issued": False,
+            "repair_builds": counters["repair_builds"],
+            "provider_calls": counters["provider_calls"],
+            "evaluation_mutated_committed_authority": False,
+            "draft_feedback_authority_equal": True,
+            "draft_feedback_bytes": response_bytes,
+            "draft_feedback_below_64k": response_bytes < 64 * 1024,
+            "draft_feedback_authorized_no_feasible": False,
+            "occupancy_schema": occupancy["schema"],
+            "submitted_frozen_draft": "A",
+            "submit_builds": 0,
+            "submit_provider_calls": 0,
+            "published_cycles": 1,
+            "concurrent_submit_single_flight": True,
+            "lost_submit_response_replayed": True,
+            "publish_failure_preserved_draft": True,
+            "abandon_failure_preserved_session": True,
+            "permitted_intents_state_derived": True,
+            "exterior_feedback_absent": True,
+            "malformed_exterior_feedback_rejected": True,
+            "stages_cleaned": True,
+            "attempt_handles_revoked": True,
+            "abandon_waited_for_inflight": True,
+            "post_abandon_draft_absent": True,
+            "inflight_abandon_builds": 1,
+            "inflight_abandon_providers": 1,
+            "drain": drain,
+            "feedback": draft_a["feedback"],
+        }
+    finally:
+        bridge.stop()
+        supervisor.close()
+        shutil.rmtree(socket_root, ignore_errors=True)
+
+
+def _run_draft_drain_probe(
+    workspace_template: Path,
+    *,
+    trusted: Path,
+    published_rebuild: Path,
+    published_geometry: Path,
+    registry: Path,
+    sidecar: Any,
+    candidate_runtime: Path,
+) -> dict[str, Any]:
+    """Prove close drains real draft evaluation and publication calls."""
+
+    results: dict[str, bool] = {}
+    for phase in ("evaluate", "publish"):
+        workspace = workspace_template.parent / f"draft-drain-{phase}-workspace"
+        shutil.copytree(workspace_template, workspace)
+        candidate_root = workspace.parent / f".agent-candidate-draft-drain-{phase}"
+        provider_ready = threading.Event()
+        release_provider = threading.Event()
+
+        def repair_provider(request: Any) -> None:
+            runner.real_repair_evidence_provider(
+                request,
+                capability_path=sidecar.capability_dir / "runtime.json",
+                meshscope_src=trusted / runner.MESHSCOPE_RUNTIME_RELATIVE / "src",
+                meshshot_src=trusted / runner.MESHSHOT_RUNTIME_RELATIVE / "src",
+            )
+            if phase == "evaluate":
+                provider_ready.set()
+                if not release_provider.wait(timeout=10):
+                    raise RuntimeError("evaluation drain probe timed out")
+
+        supervisor = WorkspaceSupervisor(
+            workspace,
+            bind_reference=True,
+            candidate_root=candidate_root,
+            rebuild_entrypoint=published_rebuild,
+            geometry_entrypoint=published_geometry,
+            tool_registry=registry,
+            browser_runtime_capability=sidecar.capability_dir / "runtime.json",
+            candidate_runtime=candidate_runtime,
+            trusted_tools_root=trusted,
+            trusted_product_root=trusted,
+            reconstruction_spec=True,
+            repair_evidence_provider=repair_provider,
+        )
+        socket_root = Path(tempfile.mkdtemp(prefix=f"ttc-draft-drain-{phase}-", dir="/tmp"))
+        bridge = AgentSurfaceBridge(
+            supervisor.agent_surface(),
+            socket_root / "surface.sock",
+            trusted_product_root=trusted,
+        )
+        bridge_stop_attempted = False
+        primary_error: BaseException | None = None
+
+        def call(intent: str, args: Mapping[str, Any]) -> dict[str, Any]:
+            frame = _surface_call(
+                bridge.socket_path,
+                {"schema": "mesh-to-cad.agent-intent/1", "intent": intent, "args": dict(args)},
+            )
+            if frame.get("ok") is not True:
+                raise ProviderFreeError(f"draft drain {phase} {intent} failed")
+            return frame["response"]["result"]
+
+        def invoke(intent: str, args: Mapping[str, Any]) -> dict[str, Any]:
+            return _surface_call(
+                bridge.socket_path,
+                {"schema": "mesh-to-cad.agent-intent/1", "intent": intent, "args": dict(args)},
+            )
+
+        try:
+            bridge.start()
+            bootstrap = supervisor.agent_bootstrap_contract()
+            wh = bootstrap["workspace_handle"]
+            facts = supervisor.workspace_api.read_current_step_decision_facts(
+                workspace, step=0
+            )
+            target = facts["repair_targets"]["items"][0]
+            _spec(candidate_root / "reconstruction-spec.json", "component.drain", target["bounds_canonical"])
+            _json(candidate_root / "plan.json", {"schema": "voxblame.repair-batch/1", "from_step": 0, "selected_targets": [target], "planned_edits": [{"edit_key": f"drain-{phase}", "target_ranks": [target["rank"]], "spec_region_id": "component.drain", "description": f"drain {phase}"}], "rationale": "prove supervisor drain ordering", "preview_observation": "committed Step 0 remains unaccepted"})
+            parent = supervisor.registry.issue("step", 0)
+            attempt = call("start_attempt", {"workspace_handle": wh, "plan_handle": bootstrap["plan_handle"], "parent_step_handle": parent})
+            _source(candidate_root / "work/source/model.py", REPAIR_A_WIDTH)
+            _json(candidate_root / "work/assessment.json", {"schema": "mesh-to-cad.assessment/1", "from_step": 0, "to_step": 1, "preview_observation": f"drain {phase}", "summary": f"drain {phase}"})
+
+            if phase == "publish":
+                draft = call("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt["attempt_handle"], "candidate_handle": attempt["candidate_handle"], "evaluation_ticket": attempt["evaluation_ticket"]})
+                prepared = supervisor.registry.resolve(draft["draft_handle"], "draft")
+                original_publish_cycle = supervisor.workspace_api.publish_cycle
+                publish_ready = threading.Event()
+                release_publish = threading.Event()
+
+                def paused_publish_cycle(*args: Any, **kwargs: Any) -> Mapping[str, Any]:
+                    publish_ready.set()
+                    if not release_publish.wait(timeout=10):
+                        raise RuntimeError("publication drain probe timed out")
+                    return original_publish_cycle(*args, **kwargs)
+
+                supervisor.workspace_api.publish_cycle = paused_publish_cycle
+                operation = lambda: invoke("submit_repair", {"workspace_handle": wh, "attempt_handle": attempt["attempt_handle"], "draft_handle": draft["draft_handle"]})
+                ready = publish_ready
+                release = release_publish
+                retained_stage = Path(prepared["stage"])
+            else:
+                operation = lambda: invoke("evaluate_repair_draft", {"workspace_handle": wh, "attempt_handle": attempt["attempt_handle"], "candidate_handle": attempt["candidate_handle"], "evaluation_ticket": attempt["evaluation_ticket"]})
+                ready = provider_ready
+                release = release_provider
+                retained_stage = None
+
+            operation_results: list[dict[str, Any]] = []
+            operation_errors: list[BaseException] = []
+
+            def run_operation() -> None:
+                try:
+                    operation_results.append(operation())
+                except BaseException as error:
+                    operation_errors.append(error)
+
+            operation_thread = threading.Thread(target=run_operation)
+            operation_thread.start()
+            ready.wait()
+            close_errors: list[BaseException] = []
+
+            def close_supervisor() -> None:
+                try:
+                    supervisor.close()
+                except BaseException as error:
+                    close_errors.append(error)
+
+            close_thread = threading.Thread(target=close_supervisor)
+            close_thread.start()
+            time.sleep(0.2)
+            stage_present = (
+                retained_stage.is_dir()
+                if retained_stage is not None
+                else any(supervisor._staging_root.glob("draft-*"))
+            )
+            if not close_thread.is_alive() or not stage_present or not candidate_root.is_dir():
+                raise ProviderFreeError(f"supervisor deleted private roots before {phase} drained")
+            release.set()
+            operation_thread.join()
+            close_thread.join()
+            if operation_thread.is_alive() or close_thread.is_alive() or operation_errors or close_errors or not operation_results:
+                raise ProviderFreeError(f"supervisor did not drain draft {phase}")
+            operation_frame = operation_results[0]
+            if operation_frame.get("ok") is not True and operation_frame != {
+                "ok": False,
+                "schema": "mesh-to-cad.agent-error/1",
+                "error": {
+                    "classification": "supervisor_failure",
+                    "path": "$.supervisor",
+                    "detail": "supervisor_failure",
+                },
+            }:
+                raise ProviderFreeError(f"draft {phase} returned an invalid cancellation response")
+            if candidate_root.exists() or supervisor._staging_root.exists():
+                raise ProviderFreeError(f"supervisor retained private roots after {phase} drain")
+            if phase == "publish":
+                supervisor.workspace_api.publish_cycle = original_publish_cycle
+            results[f"{phase}_drained"] = True
+            bridge_stop_attempted = True
+            bridge.stop()
+            results[f"{phase}_transport_stopped"] = True
+        except BaseException as error:
+            primary_error = error
+            raise
+        finally:
+            if phase == "publish" and "original_publish_cycle" in locals():
+                supervisor.workspace_api.publish_cycle = original_publish_cycle
+            if not bridge_stop_attempted:
+                try:
+                    bridge.stop()
+                except Exception:
+                    if primary_error is None:
+                        raise
+            try:
+                supervisor.close()
+            except Exception:
+                if primary_error is None:
+                    raise
+            shutil.rmtree(socket_root, ignore_errors=True)
+    return {
+        "schema": "text-to-cad.repair-draft-drain-evidence/1",
+        "evaluate_drained": results.get("evaluate_drained") is True,
+        "publish_drained": results.get("publish_drained") is True,
+        "transport_threads_terminated": all(
+            results.get(f"{phase}_transport_stopped") is True
+            for phase in ("evaluate", "publish")
+        ),
+        "private_roots_preserved_until_drain": True,
+        "private_roots_removed_after_drain": True,
+    }
+
+
 def validate_artifacts(
     repo_root: Path,
     record: Mapping[str, Any],
@@ -2589,6 +3339,10 @@ def validate_artifacts(
         return _validate_v11_artifacts(
             repo_root, record, schema=EVIDENCE_SCHEMA_V13
         )
+    if schema == EVIDENCE_SCHEMA_V14:
+        return _validate_v11_artifacts(
+            repo_root, record, schema=EVIDENCE_SCHEMA_V14
+        )
     raise ProviderFreeError("unknown evidence schema")
 
 
@@ -2621,10 +3375,12 @@ def _validate_v11_artifacts(
         "final",
         "client_transport",
     }
-    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13}:
+    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}:
         required.add("observation_gate")
-    if schema == EVIDENCE_SCHEMA_V13:
+    if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}:
         required.add("target_section_observation")
+    if schema == EVIDENCE_SCHEMA_V14:
+        required.add("draft_evaluation")
     if (
         not isinstance(evidence, dict)
         or set(evidence) != required
@@ -2636,7 +3392,7 @@ def _validate_v11_artifacts(
     ):
         raise ProviderFreeError("invalid v11 evidence shape")
     if manifest != {
-        "schema": f"text-to-cad.provider-free-artifact-manifest/{13 if schema == EVIDENCE_SCHEMA_V13 else 12 if schema == EVIDENCE_SCHEMA_V12 else 11}",
+        "schema": f"text-to-cad.provider-free-artifact-manifest/{14 if schema == EVIDENCE_SCHEMA_V14 else 13 if schema == EVIDENCE_SCHEMA_V13 else 12 if schema == EVIDENCE_SCHEMA_V12 else 11}",
         "final_status": 0,
         "identity": expected_identity(record),
         "evidence": {"path": evidence_path.name},
@@ -2689,11 +3445,15 @@ def _validate_v11_artifacts(
             "schema": "text-to-cad.client-transport-evidence/1",
             "transport": "stdin_heredoc",
             "exit_status": 0,
-            "response_schema": "mesh-to-cad.agent-response/6",
+            "response_schema": (
+                "mesh-to-cad.agent-response/7"
+                if schema == EVIDENCE_SCHEMA_V14
+                else "mesh-to-cad.agent-response/6"
+            ),
             "intent": "workspace_status",
             "invalid_request": False,
         }:
-            raise ProviderFreeError("v11 transport did not use response/6")
+            raise ProviderFreeError("v11 transport response schema is invalid")
     steps = evidence["steps"]
     if set(steps) != {"step_zero", "repair_a", "repair_b", "repair_c"}:
         raise ProviderFreeError("invalid v11 published steps")
@@ -2764,7 +3524,7 @@ def _validate_v11_artifacts(
         )
     ):
         raise ProviderFreeError("v11 module provenance is invalid")
-    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13}:
+    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}:
         gate = evidence["observation_gate"]
         if (
             not isinstance(gate, dict)
@@ -2825,7 +3585,7 @@ def _validate_v11_artifacts(
         historical_observation = gate["historical_observation"]
         observation_schema = (
             "mesh-to-cad.target-section-observation/3"
-            if schema == EVIDENCE_SCHEMA_V13
+            if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}
             else "mesh-to-cad.target-section-observation/2"
         )
         if (
@@ -2846,7 +3606,7 @@ def _validate_v11_artifacts(
             sys.path.insert(0, os.fspath(meshscope_src))
         from meshscope import target_section_profile
 
-        if schema == EVIDENCE_SCHEMA_V13:
+        if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}:
             from meshscope.voxblame import read_surface_tree
 
             authority = lambda step, item: _authority_target_section_v3(
@@ -2874,7 +3634,7 @@ def _validate_v11_artifacts(
             target_section_profile,
         ):
             raise ProviderFreeError("V12 observation differs from committed authority")
-        if schema == EVIDENCE_SCHEMA_V13:
+        if schema in {EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14}:
             section = evidence["target_section_observation"]
             if (
                 not isinstance(section, dict)
@@ -2973,6 +3733,97 @@ def _validate_v11_artifacts(
                 )
             ):
                 raise ProviderFreeError("v13 Target Section leaked private detail")
+    if schema == EVIDENCE_SCHEMA_V14:
+        draft = evidence["draft_evaluation"]
+        expected_keys = {
+            "schema", "attempts", "admitted", "successful",
+            "admitted_failures", "invalid_ticket_consumed",
+            "stale_ticket_consumed", "completed_ticket_replayed",
+            "concurrent_ticket_single_flight", "ninth_ticket_issued",
+            "repair_builds", "provider_calls",
+            "evaluation_mutated_committed_authority",
+            "draft_feedback_authority_equal", "draft_feedback_bytes",
+            "draft_feedback_below_64k", "draft_feedback_authorized_no_feasible",
+            "occupancy_schema", "submitted_frozen_draft", "submit_builds",
+            "submit_provider_calls", "published_cycles",
+            "concurrent_submit_single_flight", "lost_submit_response_replayed",
+            "publish_failure_preserved_draft", "abandon_failure_preserved_session",
+            "permitted_intents_state_derived", "exterior_feedback_absent",
+            "malformed_exterior_feedback_rejected", "stages_cleaned",
+            "attempt_handles_revoked", "abandon_waited_for_inflight",
+            "post_abandon_draft_absent", "inflight_abandon_builds",
+            "inflight_abandon_providers", "drain", "feedback",
+        }
+        expected_scalars = {
+            "schema": "text-to-cad.repair-draft-evaluation-evidence/1",
+            "attempts": 2,
+            "admitted": 8,
+            "successful": 7,
+            "admitted_failures": 1,
+            "invalid_ticket_consumed": False,
+            "stale_ticket_consumed": False,
+            "completed_ticket_replayed": True,
+            "concurrent_ticket_single_flight": True,
+            "ninth_ticket_issued": False,
+            "repair_builds": 8,
+            "provider_calls": 8,
+            "evaluation_mutated_committed_authority": False,
+            "draft_feedback_authority_equal": True,
+            "draft_feedback_below_64k": True,
+            "draft_feedback_authorized_no_feasible": False,
+            "occupancy_schema": "mesh-to-cad.target-section-observation/3",
+            "submitted_frozen_draft": "A",
+            "submit_builds": 0,
+            "submit_provider_calls": 0,
+            "published_cycles": 1,
+            "concurrent_submit_single_flight": True,
+            "lost_submit_response_replayed": True,
+            "publish_failure_preserved_draft": True,
+            "abandon_failure_preserved_session": True,
+            "permitted_intents_state_derived": True,
+            "exterior_feedback_absent": True,
+            "malformed_exterior_feedback_rejected": True,
+            "abandon_waited_for_inflight": True,
+            "post_abandon_draft_absent": True,
+            "inflight_abandon_builds": 1,
+            "inflight_abandon_providers": 1,
+            "stages_cleaned": True,
+            "attempt_handles_revoked": True,
+        }
+        if (
+            not isinstance(draft, dict)
+            or set(draft) != expected_keys
+            or any(draft.get(key) != value for key, value in expected_scalars.items())
+        ):
+            raise ProviderFreeError("invalid v14 draft evaluation evidence")
+        if draft.get("drain") != {
+            "schema": "text-to-cad.repair-draft-drain-evidence/1",
+            "evaluate_drained": True,
+            "publish_drained": True,
+            "transport_threads_terminated": True,
+            "private_roots_preserved_until_drain": True,
+            "private_roots_removed_after_drain": True,
+        }:
+            raise ProviderFreeError("invalid v14 draft drain evidence")
+        draft_workspace = exp_dir / "run/draft-evaluation-workspace"
+        parent_measurement = json.loads(
+            (draft_workspace / "voxblame/steps/000000/measurement.json").read_text(encoding="utf-8")
+        )
+        child_measurement = json.loads(
+            (draft_workspace / "voxblame/steps/000001/measurement.json").read_text(encoding="utf-8")
+        )
+        authority_feedback = _draft_feedback_authority(parent_measurement, child_measurement)
+        feedback_bytes = len(json.dumps(authority_feedback, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        if (
+            draft.get("feedback") != authority_feedback
+            or draft.get("draft_feedback_bytes") != feedback_bytes
+            or feedback_bytes >= 64 * 1024
+            or len(list((draft_workspace / "cycles").glob("*/cycle.json"))) != 1
+        ):
+            raise ProviderFreeError("v14 draft feedback differs from committed authority")
+        draft_public = json.dumps(draft["feedback"], sort_keys=True).lower()
+        if any(token in draft_public for token in ("active_depth", "surface_error_count", "identity", "target_key", "mask", "depth8", "component", "handle", '"path"')):
+            raise ProviderFreeError("v14 draft feedback leaked private detail")
     public_text = json.dumps(evidence, sort_keys=True).lower()
     if any(
         token in public_text
@@ -2987,7 +3838,7 @@ def _validate_v11_artifacts(
         )
     ):
         raise ProviderFreeError("v11 evidence leaked private detail")
-    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13} and any(
+    if schema in {EVIDENCE_SCHEMA_V12, EVIDENCE_SCHEMA_V13, EVIDENCE_SCHEMA_V14} and any(
         token in public_text
         for token in (
             '"handle"',
@@ -3135,9 +3986,12 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             attempt = surface.handle({"schema": "mesh-to-cad.agent-intent/1", "intent": "start_attempt", "args": {"workspace_handle": wh, "plan_handle": ph, "parent_step_handle": parent["step_handle"]}}); _public(attempt)
             child = attempt["result"]
             _source(candidate_root / "work/source/model.py", width)
-            run = surface.handle({"schema": "mesh-to-cad.agent-intent/1", "intent": "run_candidate_tool", "args": {"workspace_handle": wh, "attempt_handle": child["attempt_handle"], "candidate_handle": child["candidate_handle"], "operation_handle": child["capability_bundle_handle"]}}); _public(run)
             _json(candidate_root / "work/assessment.json", {"schema": "mesh-to-cad.assessment/1", "from_step": parent_ordinal, "to_step": next_ordinal, "preview_observation": assessment_observation, "summary": assessment_summary})
-            response = surface.handle({"schema": "mesh-to-cad.agent-intent/1", "intent": "submit_repair", "args": {"workspace_handle": wh, "attempt_handle": child["attempt_handle"], "candidate_handle": child["candidate_handle"]}}); _public(response)
+            evaluated = surface.handle({"schema": "mesh-to-cad.agent-intent/1", "intent": "evaluate_repair_draft", "args": {"workspace_handle": wh, "attempt_handle": child["attempt_handle"], "candidate_handle": child["candidate_handle"], "evaluation_ticket": child["evaluation_ticket"]}}); _public(evaluated)
+            draft_handle = evaluated.get("result", {}).get("draft_handle")
+            if not isinstance(draft_handle, str):
+                raise ProviderFreeError("Repair draft evaluation failed")
+            response = surface.handle({"schema": "mesh-to-cad.agent-intent/1", "intent": "submit_repair", "args": {"workspace_handle": wh, "attempt_handle": child["attempt_handle"], "draft_handle": draft_handle}}); _public(response)
             result = response["result"]
             ordinal = result["decision_facts"]["step_ordinal"]
             preview = exp_dir / f"steps/{ordinal:06d}/preview/preview.png"
@@ -3212,16 +4066,16 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             _public(failed_start)
             failed_attempt = failed_start["response"]["result"]
             _source(candidate_root / "work/source/model.py", REPAIR_C_WIDTH)
-            failed_run = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "run_candidate_tool", "args": {"workspace_handle": wh, "attempt_handle": failed_attempt["attempt_handle"], "candidate_handle": failed_attempt["candidate_handle"], "operation_handle": failed_attempt["capability_bundle_handle"]}})
-            _public(failed_run)
             assessment_path = candidate_root / "work/assessment.json"
             assessment_path.unlink(missing_ok=True)
-            failed_submit = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "submit_repair", "args": {"workspace_handle": wh, "attempt_handle": failed_attempt["attempt_handle"], "candidate_handle": failed_attempt["candidate_handle"]}})
-            _public(failed_submit)
-            failed_result = failed_submit.get("response", {}).get("result", {})
-            if failed_result.get("state") != "failed" or failed_result.get("classification") != "repair_evidence_failed":
-                raise ProviderFreeError("real repair evidence failure did not retire the Attempt")
+            failed_evaluation = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "evaluate_repair_draft", "args": {"workspace_handle": wh, "attempt_handle": failed_attempt["attempt_handle"], "candidate_handle": failed_attempt["candidate_handle"], "evaluation_ticket": failed_attempt["evaluation_ticket"]}})
+            _public(failed_evaluation)
+            failed_result = failed_evaluation.get("response", {}).get("result", {})
+            if failed_result.get("state") != "failed" or failed_result.get("classification") != "admitted_failure":
+                raise ProviderFreeError("real Repair draft failure was not admitted")
             failed_attempt_results.append(failed_result["subtype"])
+            abandoned = _surface_call(bridge.socket_path, {"schema": "mesh-to-cad.agent-intent/1", "intent": "abandon_repair_attempt", "args": {"workspace_handle": wh, "attempt_handle": failed_attempt["attempt_handle"]}})
+            _public(abandoned)
         exhausted_status, exhausted_transport = _workspace_status_via_client(
             trusted / ".claude/agent-source-projection/agent-surface/client.py",
             bridge.socket_path,
@@ -3333,7 +4187,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         final_response = final_frame.get("response") if final_frame.get("ok") is True else None
         if (
             not isinstance(final_response, dict)
-            or final_response.get("schema") != "mesh-to-cad.agent-response/6"
+            or final_response.get("schema") != "mesh-to-cad.agent-response/7"
             or final_response.get("intent") != "select_and_finalize"
             or final_response.get("result", {}).get("state") != "finalized"
         ):
@@ -3427,6 +4281,16 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             sidecar=sidecar,
             candidate_runtime=candidate_lease.runtime,
         )
+        draft_evaluation = _run_draft_evaluation_probe(
+            exp_dir / "run/draft-evaluation-workspace",
+            fixture,
+            trusted=trusted,
+            published_rebuild=published_rebuild,
+            published_geometry=published_geometry,
+            registry=registry,
+            sidecar=sidecar,
+            candidate_runtime=candidate_lease.runtime,
+        )
         target_paging = {"schema": "text-to-cad.repair-target-paging-evidence/1", "step_ordinal": step_ordinal, "pages": target_pages, "historical_reread": historical_reread, "selected": active}
         step_zero_target = next(
             item
@@ -3482,7 +4346,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             "cycle_exhaustion": cycle_exhaustion,
         }
         evidence = {
-            "schema": EVIDENCE_SCHEMA_V13,
+            "schema": EVIDENCE_SCHEMA_V14,
             "identity": identity,
             "scenario": SCENARIO,
             "gate_passed": True,
@@ -3522,12 +4386,13 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             "client_transport": client_transport,
             "observation_gate": observation_gate,
             "target_section_observation": target_section_observation,
+            "draft_evaluation": draft_evaluation,
         }
         _json(evidence_path, evidence)
         _json(
             artifact_manifest_path,
             {
-                "schema": "text-to-cad.provider-free-artifact-manifest/13",
+                "schema": "text-to-cad.provider-free-artifact-manifest/14",
                 "final_status": 0,
                 "identity": identity,
                 "evidence": {"path": evidence_path.name},

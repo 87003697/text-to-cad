@@ -21,7 +21,8 @@ fixture rather than adding a dependency.
 
 Agent requests use the closed `mesh-to-cad.agent-intent/1` envelope and only
 the following intents: `workspace_status`, `start_attempt`,
-`run_candidate_tool`, `submit_step_zero`, `submit_repair`,
+`run_candidate_tool`, `submit_step_zero`, `evaluate_repair_draft`,
+`submit_repair`, `abandon_repair_attempt`,
 `inspect_repair_targets`, `observe_target_section`, `select_and_finalize`, and
 `observe_reference`.
 Workspace, Attempt, candidate,
@@ -43,21 +44,47 @@ parent. Numeric parent ordinals and cross-run or wrong-kind handles fail
 closed at the Agent Surface boundary before any Workspace call.
 `start_attempt` returns one additional opaque
 `capability_bundle_handle`. It is bound only after the Workspace returns the
-actual Attempt and intended step. Reuse that bundle handle for candidate tool
-execution; the Supervisor resolves its operation slots internally. Bootstrap
+actual Attempt and intended step. Use it for Step 0 candidate-tool execution;
+Repair draft evaluation performs its own private canonical build. Bootstrap
 contains only run-level capabilities and the fixed maximum budget, never
 predicted global Attempt IDs.
 
-`submit_step_zero` and `submit_repair` accept only the opaque workspace,
-attempt, and candidate handles; the Agent never selects an evidence handle,
-path, or filename. The W1 facade owns evidence discovery under the trusted
-candidate tree through its `_from_candidate` operations, using a fixed
-internal producer filename set. That filename set is a temporary internal
-producer boundary between the trusted candidate tree and the W1 facade — it
-is not an Agent contract and is not described as trusted production
-evidence. Real trusted measurement/preview/diff providers are the next
-required correctness landing (A-A2); until then, candidate-authored evidence
-must be treated as an internal fixture, not production authority.
+`submit_step_zero` accepts only the opaque workspace, Attempt, and candidate
+handles. Repair authors source and assessment, then uses
+`evaluate_repair_draft` with an Attempt bound ticket. The supervisor snapshots
+those inputs into a fresh private stage, runs the fixed canonical build there,
+and retains an immutable draft with closed feedback. `submit_repair`
+accepts only the workspace, Attempt, and selected draft handles, while
+`abandon_repair_attempt` retires the Attempt without consuming a Cycle. The
+Agent never selects an evidence handle, path, or filename. Eight evaluations
+are admitted per intended step across up to three Attempts; invalid and stale
+tickets consume no slot, an admitted provider failure consumes one slot, and a
+completed ticket replays its cached result. Concurrent calls with the same
+ticket share that one result and spend one slot. No ninth ticket is issued.
+Repair always permits abandonment while its Attempt is active. Submission is
+permitted only after at least one successful retained draft exists; evaluation
+is permitted only while a valid next ticket exists. A later failure or exhausted
+budget does not remove an earlier retained draft. If abandonment overlaps an
+admitted evaluation, the supervisor lets that single flight settle before it
+revokes the Attempt and removes every retained private stage; no draft from the
+retired Attempt remains callable.
+W1 copies only the Agent-authored source and assessment into each private
+draft stage. The supervisor produces the fixed candidate measurement there,
+and the real Repair evidence provider produces measurement, preview, diff,
+and source-change evidence. None of those filenames or stage paths is an
+Agent contract.
+
+Draft feedback is the closed `mesh-to-cad.repair-draft-feedback/1` projection
+of the frozen parent Active frontier and draft Active frontier. `before` and
+`after` contain exactly missing/excess surface counts and signed `delta` is
+`after - before`. `target_change_preview` partitions exact public
+`{kind,bounds_canonical}` identities into `resolved`, `persisted`, and `new`,
+with at most eight returned items per partition and explicit total/remaining
+counts. It publishes no numeric depth, target key, mask, component, path, or
+Depth-8 result. Evaluation publishes no Step, Cycle, VoxBlame index, Final
+Delivery, or parent-history mutation. Submitting a retained draft promotes its
+exact frozen candidate, assessment, and real evidence without rebuilding or
+rerunning the provider, then publishes exactly one Cycle.
 
 `inspect_repair_targets` accepts exactly a returned opaque `step_handle` and a
 non-negative page-start `offset`. W1 reads that historical Measured Step's
@@ -277,13 +304,11 @@ run returns the wrapped command's exit code.
   with `state=failed`, leaves the Attempt active for a bounded retry, and does
   not spend a published Attempt command until a build succeeds.
 - If trusted Repair evidence cannot satisfy its fixed comparison contract,
-  the supervisor records the active Attempt as `strategy_changed`, returns
-  `submit_repair` with `state=failed` and the closed
-  `repair_evidence_failed` classification with one closed subtype, and permits
-  another Attempt from an existing Measured Step. The subtype is the only
-  repair-evidence diagnostic returned to the Agent and is retained as the
-  closed `repair-evidence-failure.json` Attempt artifact for host-side pilot
-  review; unknown publication failures remain fatal.
+  `evaluate_repair_draft` returns one admitted failure with a closed subtype.
+  The failure consumes its evaluation slot but no Cycle or tool-failure budget,
+  and the Attempt remains active. Completed success and failure tickets replay
+  exactly. The Agent may submit any earlier retained draft or abandon the
+  Attempt; it never cleans up a private draft build or `candidate.glb`.
 - finalize validates Agent-owned selection evidence, copies every selected
   recipe input into isolated staging, executes the explicitly supplied
   registered CAD rebuild adapter, proves the complete source to

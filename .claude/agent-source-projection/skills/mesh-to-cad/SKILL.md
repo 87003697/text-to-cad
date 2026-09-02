@@ -44,16 +44,20 @@ a closed result plus the list of intents permitted next.
   additionally return `publication_recovery`, the exact published response.
 - `start_attempt` — begin one bounded Attempt from an authored plan
   handle. Optionally branch from a parent step handle.
-- `run_candidate_tool` — ask the supervisor to run one registered
-  candidate operation (canonical build, preview, measurement, diff) on
-  the current Attempt's candidate. You never invoke these tools yourself.
+- `run_candidate_tool` — for Step 0, ask the supervisor to run the fixed
+  canonical build on the current Attempt's candidate. You never invoke the
+  build tool yourself.
 - `submit_step_zero` — submit the measured initial step through the
   supervisor using only the workspace, attempt, and candidate handles.
   The supervisor owns the trusted candidate tree and its evidence; you
   never name or select evidence handles.
-- `submit_repair` — submit one measured repair cycle through the
-  supervisor using only the workspace, attempt, and candidate handles.
-  The supervisor discovers evidence from the trusted candidate tree.
+- `evaluate_repair_draft` — snapshot the current Repair source and assessment,
+  build and evaluate that private snapshot, and retain one immutable draft
+  with closed feedback (maximum eight per intended step).
+- `submit_repair` — publish one selected evaluated draft using its opaque
+  draft handle.
+- `abandon_repair_attempt` — retire the active Repair Attempt early or after
+  draft exhaustion while preserving the intended-step evaluation budget.
 - `inspect_formal_preview` — use the opaque `preview_handle` returned by a
   published Step to inspect its formal image through the Agent Surface MCP
   tool. In code mode call `mcp__agent_surface__inspect_formal_preview`; native
@@ -135,8 +139,11 @@ The `args` object must have exactly the fields for its intent:
   `parent_step_handle`.
 - `run_candidate_tool`: `workspace_handle`, `attempt_handle`,
   `candidate_handle`, `operation_handle`.
-- `submit_step_zero` and `submit_repair`: `workspace_handle`,
-  `attempt_handle`, `candidate_handle`.
+- `submit_step_zero`: `workspace_handle`, `attempt_handle`, `candidate_handle`.
+- `evaluate_repair_draft`: `workspace_handle`, `attempt_handle`,
+  `candidate_handle`, `evaluation_ticket`.
+- `submit_repair`: `workspace_handle`, `attempt_handle`, `draft_handle`.
+- `abandon_repair_attempt`: `workspace_handle`, `attempt_handle`.
 - `inspect_repair_targets`: `step_handle`, `offset`.
 - `observe_target_section`: `step_handle`, `rank`.
 - `select_and_finalize`: `workspace_handle`, `step_handle`,
@@ -154,7 +161,7 @@ Every successful client response is one JSON object with the response envelope:
 {
   "ok": true,
   "response": {
-    "schema": "mesh-to-cad.agent-response/6",
+    "schema": "mesh-to-cad.agent-response/7",
     "intent": "<same intent>",
     "result": { "...": "..." }
   }
@@ -172,6 +179,15 @@ Each intent has its own closed result shape:
   step, not remaining balances or a shared pool.
 - `start_attempt`: `state`, `attempt_handle`, `candidate_handle`,
   `capability_bundle_handle`, `permitted_next_intents`.
+- Repair `start_attempt` additionally returns `evaluation_ticket` and
+  `draft_budget` `{used, remaining, maximum:8}`.
+- `evaluate_repair_draft`: on success, `state`, `draft_handle`, closed
+  `feedback`, `next_evaluation_ticket` (or `null` at exhaustion), and
+  `permitted_next_intents`. An admitted evidence failure consumes its slot and
+  returns `classification`, a closed `subtype`, and the next ticket; an invalid
+  or stale ticket consumes no slot. Replaying a completed ticket returns its
+  cached result.
+- `abandon_repair_attempt`: `state`, `permitted_next_intents`.
 - `run_candidate_tool`: `state`, `candidate_handle`, `result_handle`,
   `permitted_next_intents`.
 - `submit_step_zero`: `state`, `step_handle`, `preview_handle`, `decision_facts`,
@@ -197,6 +213,15 @@ Each intent has its own closed result shape:
   `target:[1,1,1]` and separate Reference and candidate 3×3×3 boolean/null
   cubes indexed `[x][y][z]`. `true` is occupied, `false` is in-frame empty,
   and `null` is outside the canonical frame.
+
+Repair draft feedback is `mesh-to-cad.repair-draft-feedback/1`. `before` and
+`after` contain only the parent and draft Active-Depth missing/excess surface
+counts; signed `delta` is `after - before`. `target_change_preview` contains
+`resolved`, `persisted`, and `new`, each with `total`, `returned`, `remaining`,
+and at most eight `{kind,bounds_canonical}` items. Use it to compare local
+surface hypotheses. It does not expose a depth, component identity, or fixed
+Depth-8 verdict, and it does not count as inspecting a committed target for
+`no_feasible_strategy` finalization.
 
 `observe_reference` is not a workflow-state response. Its `result` is exactly
 `{"observation":{"method":"<method>","value":{...}}}`. A `summary` value
@@ -280,11 +305,11 @@ Rules:
   for you. Never open, list, or infer the existence of any sibling
   under `/candidate` (there are no Attempt-identified subdirectories
   to enumerate; any that appear must be ignored).
-- Do not write, name, or otherwise touch `work/candidate.glb` or any
-  export artifact — the supervisor builds them from your source. Once
-  `candidate.glb` exists, submit the result instead of calling
-  `run_candidate_tool` again in that Attempt; a retry is only for a failed
-  operation that left no `candidate.glb`.
+- Do not write, name, remove, or otherwise touch `work/candidate.glb` or any
+  export artifact — the supervisor builds them from your source. For Step 0,
+  once the build succeeds, submit it instead of calling `run_candidate_tool`
+  again. Repair evaluation always builds a fresh private snapshot and never
+  requires export cleanup in `/candidate/work`.
 - The recipe the trusted tool produces is work-relative. It rebuilds
   from `source/` alone; do not attempt to run exports yourself.
 - The supervisor resets `/candidate/work` between Attempts. If the
@@ -616,17 +641,21 @@ Repair Cycle. The supervisor enforces this shape:
    `spec_region_id`; use `target_ranks` only for targets whose canonical bounds
    have strictly positive volume overlap with that Component's canonical bounds.
    Start the next Attempt with an explicit parent step handle; the supervisor reseeds
-   `/candidate/work/source/` with the parent's source. Edit it,
-   run the registered tools for the child, then `submit_repair`.
+   `/candidate/work/source/` with the parent's source. Edit source and assessment,
+   then use the returned ticket with `evaluate_repair_draft`. Compare its bounded
+   Active-Depth feedback with other evaluated drafts. Submit one retained
+   `draft_handle`, or call `abandon_repair_attempt` to change strategy. Each
+   evaluation builds in a fresh private stage; never create or remove a Repair GLB.
    Maintain the best-so-far result by Active Depth using lexicographic
    comparison. If a child is not better than that result, start the next
    Attempt from the best result's opaque parent handle. Stop when residuals
    establish acceptance, when no further coherent repair is plausible, or
    when no permitted repair remains. Decide whether an action is currently
    callable only from `permitted_next_intents`; never infer admission from a
-   local per-intended-step limit. If `submit_repair` returns
-   `repair_evidence_failed`, use its closed subtype only to choose the next
-   permitted action; do not infer or request host-side diagnostics.
+   local per-intended-step limit. An admitted evaluation failure consumes one
+   slot and replays exactly for its completed ticket; a stale or invalid ticket
+   consumes none. A retained successful draft remains submittable after a later
+   evaluation failure or budget exhaustion.
    For every Repair Attempt, rebind the plan to the chosen parent's current
    target facts, set `from_step` to that parent's ordinal, and set assessment
    `to_step` to one greater than the maximum published returned step ordinal;

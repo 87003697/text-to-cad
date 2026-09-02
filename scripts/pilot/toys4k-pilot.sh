@@ -212,7 +212,8 @@ contract from the fixed candidate mount /candidate/bootstrap.json. Use only
 ordinary exec_command calls to run the fixed client
 python3 /agent-surface/client.py for the closed JSON intents listed here:
 workspace_status, start_attempt, run_candidate_tool,
-submit_step_zero, submit_repair, inspect_repair_targets, observe_target_section,
+submit_step_zero, evaluate_repair_draft, submit_repair, abandon_repair_attempt,
+inspect_repair_targets, observe_target_section,
 select_and_finalize, and observe_reference.
 Begin by copying this complete invocation; it reads the real opaque handle and
 feeds the complete workspace_status request to the client on stdin:
@@ -252,9 +253,22 @@ or thickness, or turn normals into a semantic label. If any profile used by
 the hypothesis has only one or two
 triangles, treat it as ambiguous_low_sample and make no directional or semantic
 assertion from its normals. Do not call it while an Attempt is active.
+For Repair, author source and assessment, then call evaluate_repair_draft with
+the returned Attempt-bound evaluation ticket. The supervisor snapshots and
+canonically builds each draft in a fresh private stage. Compare the closed Active-Depth
+before/after/delta counts and capped resolved/persisted/new
+{kind,bounds_canonical} previews. They do not expose semantic identity or
+Depth-8 evidence. A successful evaluation returns an immutable draft_handle
+and the next ticket; an admitted evidence failure consumes its slot and also
+returns the next ticket. Invalid or stale tickets consume no slot, and a
+completed ticket replays its cached result. Submit only the chosen draft_handle;
+submission uses its frozen source, assessment, and evidence without rebuilding.
+Use abandon_repair_attempt to change strategy while preserving the intended
+step's eight-evaluation budget across Attempts. No ninth ticket exists.
 On an error, preserve its classification and do not retry blindly. For a closed
-repair_evidence_failed response, use only its subtype to choose a permitted next
-intent; never request host diagnostics. Before finalizing an unaccepted Step
+admitted evaluation failure, use only its subtype and permitted intents; an
+earlier retained draft remains submittable. Never request host diagnostics.
+Before finalizing an unaccepted Step
 with no_feasible_strategy and public Repair Targets, observe a public target on
 that exact Step. If finalization returns state_conflict, call workspace_status,
 observe the Selected Step, then retry the same selection or continue repairing.

@@ -13,7 +13,7 @@ the W1 Workspace facade and the W2 Reference Capability.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import importlib.util
 import json
@@ -169,6 +169,16 @@ class WorkspaceAPI(Protocol):
         attempt: int,
         source: Path,
         evidence_provider: Callable[..., Any],
+    ) -> Mapping[str, Any]: ...
+
+    def prepare_repair_draft(
+        self, workspace: Path, *, attempt: int, source: Path,
+        candidate_builder: Callable[[Path], None],
+        evidence_provider: Callable[..., Any], stage: Path | None = None,
+    ) -> Mapping[str, Any]: ...
+
+    def publish_prepared_repair(
+        self, workspace: Path, *, attempt: int, prepared: Mapping[str, Any]
     ) -> Mapping[str, Any]: ...
 
     def read_current_step_decision_facts(
@@ -367,6 +377,131 @@ class _AttemptContext:
     candidate_root: Path
     attempt_handle: str
     candidate_handle: str
+
+
+@dataclass
+class _DraftSession:
+    """Run private Repair draft budget shared by Attempts for one step."""
+
+    intended_step: int
+    maximum: int = 8
+    used: int = 0
+    attempts: set[int] = field(default_factory=set)
+    tickets: dict[str, dict[str, Any]] = field(default_factory=dict)
+    stages: dict[int, set[Path]] = field(default_factory=dict)
+    drafts: dict[int, set[str]] = field(default_factory=dict)
+    callers: dict[int, int] = field(default_factory=dict)
+    lock: threading.RLock = field(default_factory=threading.RLock)
+    condition: threading.Condition = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.condition = threading.Condition(self.lock)
+
+    def _issue_ticket(self, attempt_id: int) -> str | None:
+        if self.used >= self.maximum:
+            return None
+        ticket = "ticket:" + secrets.token_hex(20)
+        self.tickets[ticket] = {
+            "attempt": attempt_id,
+            "result": None,
+            "active": True,
+            "in_flight": False,
+        }
+        return ticket
+
+    def _permitted_intents(self, attempt_id: int) -> list[str]:
+        intents: list[str] = []
+        if any(
+            entry["attempt"] == attempt_id
+            and entry["active"]
+            and entry["result"] is None
+            and not entry["in_flight"]
+            for entry in self.tickets.values()
+        ):
+            intents.append("evaluate_repair_draft")
+        if self.drafts.get(attempt_id):
+            intents.append("submit_repair")
+        intents.extend(("abandon_repair_attempt", "workspace_status"))
+        return intents
+
+    def permitted_intents(self, attempt_id: int) -> list[str]:
+        with self.lock:
+            return self._permitted_intents(attempt_id)
+
+    def start(self, attempt_id: int) -> tuple[str | None, dict[str, int]]:
+        with self.lock:
+            self.attempts.add(attempt_id)
+            self.stages.setdefault(attempt_id, set())
+            self.drafts.setdefault(attempt_id, set())
+            ticket = self._issue_ticket(attempt_id)
+            return ticket, {"used": self.used, "remaining": self.maximum - self.used, "maximum": self.maximum}
+
+    def evaluate(self, attempt_id: int, ticket: str, evaluator: Callable[[], Mapping[str, Any]]) -> dict[str, Any]:
+        with self.condition:
+            entry = self.tickets.get(ticket)
+            if entry is None:
+                return {"state": "failed", "classification": "invalid_ticket"}
+            if entry["attempt"] != attempt_id or not entry["active"] or attempt_id not in self.attempts:
+                return {"state": "failed", "classification": "stale_ticket"}
+            self.callers[attempt_id] = self.callers.get(attempt_id, 0) + 1
+        try:
+            with self.condition:
+                while entry["in_flight"] and entry["result"] is None:
+                    self.condition.wait()
+                if entry["result"] is not None:
+                    return dict(entry["result"])
+                if self.used >= self.maximum:
+                    return {"state": "failed", "classification": "stale_ticket"}
+                entry["in_flight"] = True
+                self.used += 1
+            try:
+                result = dict(evaluator())
+            except Exception as error:
+                subtype = getattr(error, "subtype", "provider_execution_failed")
+                if subtype not in {
+                    "provider_execution_failed", "voxblame_output_invalid",
+                    "preview_output_invalid", "region_diff_invalid",
+                    "source_changes_invalid",
+                }:
+                    subtype = "provider_execution_failed"
+                result = {
+                    "state": "failed",
+                    "classification": "admitted_failure",
+                    "subtype": subtype,
+                }
+            with self.condition:
+                if attempt_id not in self.attempts or not entry["active"]:
+                    raise SupervisorError("stale_ticket")
+                result["next_evaluation_ticket"] = self._issue_ticket(attempt_id)
+                result["permitted_next_intents"] = self._permitted_intents(attempt_id)
+                entry["result"] = dict(result)
+                entry["in_flight"] = False
+                self.condition.notify_all()
+                return dict(result)
+        finally:
+            with self.condition:
+                self.callers[attempt_id] -= 1
+                if self.callers[attempt_id] == 0:
+                    self.callers.pop(attempt_id)
+                self.condition.notify_all()
+
+    def register_draft(self, attempt_id: int, draft_handle: str, stage: Path) -> None:
+        with self.condition:
+            if attempt_id not in self.attempts:
+                raise SupervisorError("stale_ticket")
+            self.stages.setdefault(attempt_id, set()).add(stage)
+            self.drafts.setdefault(attempt_id, set()).add(draft_handle)
+
+    def abandon(self, attempt_id: int) -> tuple[Path, ...]:
+        with self.condition:
+            while self.callers.get(attempt_id, 0):
+                self.condition.wait()
+            self.attempts.discard(attempt_id)
+            for entry in self.tickets.values():
+                if entry["attempt"] == attempt_id:
+                    entry["active"] = False
+            self.drafts.pop(attempt_id, None)
+            return tuple(self.stages.pop(attempt_id, set()))
 
 
 @dataclass
@@ -857,6 +992,7 @@ class WorkspaceSupervisor:
                 self._read_surface_tree,
             ) = _load_target_local_occupancy(trusted_meshscope_src)
             self._attempts: dict[int, _AttemptContext] = {}
+            self._draft_sessions: dict[int, _DraftSession] = {}
             self._observed_target_steps: set[int] = set()
             self._publication_condition = threading.Condition()
             self._publication_flights: dict[
@@ -975,12 +1111,9 @@ class WorkspaceSupervisor:
                 raise
             except Exception as exc:
                 raise SupervisorError("cancellation_incomplete") from exc
-        deadline = time.monotonic() + 5.0
         with self._active_calls_condition:
-            while self._active_calls and time.monotonic() < deadline:
-                self._active_calls_condition.wait(timeout=0.05)
-            if self._active_calls:
-                raise SupervisorError("cancellation_incomplete")
+            while self._active_calls:
+                self._active_calls_condition.wait()
         if (
             self._execution_scope is not None
             and self._execution_scope.has_live_processes()
@@ -1249,12 +1382,14 @@ class WorkspaceSupervisor:
     def _attempt_next_intents(
         intended_step: int, *, allow_candidate_tool: bool = True
     ) -> list[str]:
+        if intended_step != 0:
+            return ["abandon_repair_attempt", "workspace_status"]
         next_intents = []
         if allow_candidate_tool:
             next_intents.append("run_candidate_tool")
         next_intents.extend(
             (
-                "submit_step_zero" if intended_step == 0 else "submit_repair",
+                "submit_step_zero",
                 "workspace_status",
             )
         )
@@ -1354,12 +1489,20 @@ class WorkspaceSupervisor:
         elif starting_attempt or publication_in_flight or publication_failed:
             next_intents = ["workspace_status"]
         elif active_attempt is not None:
-            next_intents = self._attempt_next_intents(
-                active_attempt.intended_step,
-                allow_candidate_tool=not self._candidate_output_present(
-                    active_attempt.candidate_root
-                ),
-            )
+            if active_attempt.intended_step == 0:
+                next_intents = self._attempt_next_intents(
+                    active_attempt.intended_step,
+                    allow_candidate_tool=not self._candidate_output_present(
+                        active_attempt.candidate_root
+                    ),
+                )
+            else:
+                session = self._draft_sessions.get(active_attempt.intended_step)
+                next_intents = (
+                    session.permitted_intents(active_attempt.attempt_id)
+                    if session is not None
+                    else ["abandon_repair_attempt", "workspace_status"]
+                )
         else:
             next_intents = ["workspace_status"]
         if (
@@ -1556,13 +1699,22 @@ class WorkspaceSupervisor:
         with self._publication_condition:
             self._starting_attempt = False
         capability_bundle_handle = self._issue_attempt_capabilities(context)
-        return {
+        result = {
             "state": "started",
             "attempt_handle": context.attempt_handle,
             "candidate_handle": context.candidate_handle,
             "capability_bundle_handle": capability_bundle_handle,
             "permitted_next_intents": self._attempt_next_intents(intended_step),
         }
+        if from_step is not None:
+            session = self._draft_sessions.setdefault(intended_step, _DraftSession(intended_step))
+            ticket, budget = session.start(context.attempt_id)
+            result["evaluation_ticket"] = ticket
+            result["draft_budget"] = budget
+            result["permitted_next_intents"] = session.permitted_intents(
+                context.attempt_id
+            )
+        return result
 
     def _validate_spec_region_bindings(self, plan_path: Path) -> None:
         try:
@@ -1667,19 +1819,15 @@ class WorkspaceSupervisor:
             self._active_calls -= 1
             self._active_calls_condition.notify_all()
 
-    def _execute_canonical_build(
+    def _build_canonical_candidate(
         self,
         context: _AttemptContext,
-        request: _CanonicalBuildRequest,
-    ) -> Mapping[str, Any]:
-        """Run one trusted canonical-build invocation for the current Attempt.
+    ) -> tuple[int, str, str, Mapping[str, Any]]:
+        """Build one candidate root through the fixed trusted adapter.
 
-        The invocation targets the fixed candidate-relative work tree the
-        Agent has authored under.  The tool's argv, entrypoint, output
-        directory, and environment are all supervisor-owned; the Agent
-        cannot influence them.  On success the trusted supervisor
-        atomically publishes the tool-produced measurement.glb to the
-        fixed ``candidate.glb`` W1 consumes.
+        The caller selects only a supervisor-owned candidate root. The tool's
+        argv, entrypoint, output directory, and environment remain fixed.
+        Successful output is published at that root's ``candidate.glb``.
         """
 
         if self.canonical_build_root is None or self.cadgen_runtime_root is None:
@@ -1738,27 +1886,9 @@ class WorkspaceSupervisor:
             raise
         stdout_digest, _ = _bounded_process_detail(stdout)
         stderr_digest, _ = _bounded_process_detail(stderr)
-        result_handle = self.registry.issue(
-            "result",
-            {
-                "exit_code": exit_code,
-                "command": command_document.get("command"),
-                "stdout_sha256": stdout_digest,
-                "stderr_sha256": stderr_digest,
-                "adapter": _CANONICAL_ADAPTER_ID,
-            },
-            attempt_id=context.attempt_id,
-        )
         if exit_code != 0:
             self._discard_trusted_output(output_dir)
-            return {
-                "state": "failed",
-                "candidate_handle": context.candidate_handle,
-                "result_handle": result_handle,
-                "permitted_next_intents": self._attempt_next_intents(
-                    context.intended_step
-                ),
-            }
+            return exit_code, stdout_digest, stderr_digest, command_document
         try:
             self._reverify_source_digests(source_root, sidecars, source_digests)
             self._validate_canonical_output(output_dir, sidecars, source_digests)
@@ -1773,12 +1903,36 @@ class WorkspaceSupervisor:
             except OSError:
                 pass
             raise
+        return exit_code, stdout_digest, stderr_digest, command_document
+
+    def _execute_canonical_build(
+        self,
+        context: _AttemptContext,
+        request: _CanonicalBuildRequest,
+    ) -> Mapping[str, Any]:
+        """Run the Agent-requested Step 0 canonical build."""
+
+        exit_code, stdout_digest, stderr_digest, command_document = (
+            self._build_canonical_candidate(context)
+        )
+        result_handle = self.registry.issue(
+            "result",
+            {
+                "exit_code": exit_code,
+                "command": command_document.get("command"),
+                "stdout_sha256": stdout_digest,
+                "stderr_sha256": stderr_digest,
+                "adapter": _CANONICAL_ADAPTER_ID,
+            },
+            attempt_id=context.attempt_id,
+        )
         return {
-            "state": "completed",
+            "state": "completed" if exit_code == 0 else "failed",
             "candidate_handle": context.candidate_handle,
             "result_handle": result_handle,
             "permitted_next_intents": self._attempt_next_intents(
-                context.intended_step, allow_candidate_tool=False
+                context.intended_step,
+                allow_candidate_tool=exit_code != 0,
             ),
         }
 
@@ -2132,6 +2286,8 @@ class WorkspaceSupervisor:
         operation_handle: str,
     ) -> Mapping[str, Any]:
         context = self._attempt(workspace_handle, attempt_handle, candidate_handle)
+        if context.intended_step != 0:
+            raise SupervisorError("invalid_operation")
         resolved = self._resolve_operation_capability(operation_handle, context)
         if isinstance(resolved, _CanonicalBuildRequest):
             return self._execute_canonical_build(context, resolved)
@@ -2210,14 +2366,199 @@ class WorkspaceSupervisor:
         self,
         workspace_handle: str,
         attempt_handle: str,
-        candidate_handle: str,
+        draft_handle: str,
     ) -> Mapping[str, Any]:
-        return self._submit_publication_request(
-            workspace_handle,
-            attempt_handle,
-            candidate_handle,
-            kind="repair",
+        self._begin_active_call()
+        try:
+            return self._submit_repair(
+                workspace_handle, attempt_handle, draft_handle
+            )
+        finally:
+            self._end_active_call()
+
+    def _submit_repair(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        draft_handle: str,
+    ) -> Mapping[str, Any]:
+        key = self._publication_key(
+            workspace_handle, attempt_handle, draft_handle, "repair_draft"
         )
+        with self._publication_condition:
+            flight = self._publication_flights.get(key)
+        if flight is not None:
+            return self._wait_for_publication(flight)
+
+        attempt_record = self.registry.resolve(attempt_handle, "attempt")
+        if not isinstance(attempt_record, _AttemptContext):
+            raise SupervisorError("invalid_handle")
+        context = self._attempt(
+            workspace_handle, attempt_handle, attempt_record.candidate_handle
+        )
+        prepared = self.registry.resolve(
+            draft_handle, "draft", attempt_id=context.attempt_id
+        )
+        if not isinstance(prepared, Mapping):
+            raise SupervisorError("invalid_handle")
+        api = getattr(self.workspace_api, "publish_prepared_repair", None)
+        if api is None:
+            raise SupervisorError("workspace_contract_violation")
+        with self._publication_condition:
+            flight = self._publication_flights.get(key)
+            if flight is None:
+                if self._publication_for_attempt_locked(context.attempt_id) is not None:
+                    raise SupervisorError("attempt_already_active")
+                flight = _PublicationFlight(context.attempt_id)
+                self._publication_flights[key] = flight
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            return self._wait_for_publication(flight)
+
+        try:
+            published = api(
+                self.workspace, attempt=context.attempt_id, prepared=prepared
+            )
+            if not isinstance(published, Mapping) or "decision_facts" not in published:
+                raise SupervisorError("decision_facts_unavailable")
+            step = published.get("step", context.intended_step)
+            if isinstance(step, Mapping):
+                step = step.get("step", context.intended_step)
+            result = {
+                "state": "published",
+                "step_handle": self.registry.issue("step", int(step)),
+                "preview_handle": self.registry.issue("preview", int(step)),
+                "cycle_handle": self.registry.issue(
+                    "cycle", int(published.get("cycle", step))
+                ),
+                "decision_facts": published["decision_facts"],
+                "permitted_next_intents": [
+                    "inspect_formal_preview",
+                    "inspect_repair_targets",
+                    "start_attempt",
+                    "select_and_finalize",
+                    "workspace_status",
+                ],
+            }
+            session = self._draft_sessions.pop(context.intended_step, None)
+            if session is not None:
+                self._cleanup_draft_stages(session.abandon(context.attempt_id))
+            self._retire_attempt(context.attempt_id)
+            self._finish_publication(flight, result=result)
+            return result
+        except SupervisorError as exc:
+            self._finish_publication(flight, error=exc.classification)
+            with self._publication_condition:
+                self._publication_flights.pop(key, None)
+            raise
+        except Exception as exc:
+            self._finish_publication(flight, error="cycle_publication_failed")
+            with self._publication_condition:
+                self._publication_flights.pop(key, None)
+            raise SupervisorError("cycle_publication_failed") from exc
+
+    def evaluate_repair_draft(
+        self, workspace_handle: str, attempt_handle: str, candidate_handle: str,
+        evaluation_ticket: str,
+    ) -> Mapping[str, Any]:
+        self._begin_active_call()
+        try:
+            return self._evaluate_repair_draft(
+                workspace_handle,
+                attempt_handle,
+                candidate_handle,
+                evaluation_ticket,
+            )
+        finally:
+            self._end_active_call()
+
+    def _evaluate_repair_draft(
+        self, workspace_handle: str, attempt_handle: str, candidate_handle: str,
+        evaluation_ticket: str,
+    ) -> Mapping[str, Any]:
+        context = self._attempt(workspace_handle, attempt_handle, candidate_handle)
+        if context.intended_step == 0:
+            raise SupervisorError("invalid_operation")
+        session = self._draft_sessions.get(context.intended_step)
+        if session is None:
+            raise SupervisorError("stale_ticket")
+        api = getattr(self.workspace_api, "prepare_repair_draft", None)
+        if api is None or self._repair_evidence_provider is None:
+            raise SupervisorError("workspace_contract_violation")
+        stage = self._staging_root / ("draft-" + secrets.token_hex(12))
+
+        def build_candidate(frozen_candidate: Path) -> None:
+            draft_context = _AttemptContext(
+                attempt_id=context.attempt_id,
+                intended_step=context.intended_step,
+                candidate_root=frozen_candidate,
+                attempt_handle=context.attempt_handle,
+                candidate_handle=context.candidate_handle,
+            )
+            exit_code, _stdout, _stderr, _command = (
+                self._build_canonical_candidate(draft_context)
+            )
+            if exit_code != 0:
+                raise SupervisorError("candidate_execution_failed")
+
+        def evaluate() -> Mapping[str, Any]:
+            prepared = api(
+                self.workspace,
+                attempt=context.attempt_id,
+                source=context.candidate_root,
+                candidate_builder=build_candidate,
+                evidence_provider=self._repair_evidence_provider,
+                stage=stage,
+            )
+            if not isinstance(prepared, Mapping):
+                raise SupervisorError("draft_evaluation_failed")
+            draft_handle = self.registry.issue(
+                "draft", prepared, attempt_id=context.attempt_id
+            )
+            session.register_draft(context.attempt_id, draft_handle, stage)
+            return {
+                "state": "evaluated",
+                "draft_handle": draft_handle,
+                "feedback": prepared.get("feedback"),
+            }
+        result = session.evaluate(context.attempt_id, evaluation_ticket, evaluate)
+        if "permitted_next_intents" not in result:
+            result["permitted_next_intents"] = session.permitted_intents(
+                context.attempt_id
+            )
+        return result
+
+    def abandon_repair_attempt(self, workspace_handle: str, attempt_handle: str) -> Mapping[str, Any]:
+        self._begin_active_call()
+        try:
+            return self._abandon_repair_attempt(
+                workspace_handle, attempt_handle
+            )
+        finally:
+            self._end_active_call()
+
+    def _abandon_repair_attempt(self, workspace_handle: str, attempt_handle: str) -> Mapping[str, Any]:
+        attempt_record = self.registry.resolve(attempt_handle, "attempt")
+        context = self._attempt(workspace_handle, attempt_handle, attempt_record.candidate_handle if isinstance(attempt_record, _AttemptContext) else "")
+        if context.intended_step == 0:
+            raise SupervisorError("invalid_operation")
+        try:
+            self.workspace_api.record_attempt(self.workspace, attempt=context.attempt_id, result="strategy_changed", classification="repeated_ineffective_strategy")
+        except Exception as exc:
+            raise SupervisorError("attempt_retirement_failed") from exc
+        session = self._draft_sessions.get(context.intended_step)
+        if session is not None:
+            self._cleanup_draft_stages(session.abandon(context.attempt_id))
+        self._retire_attempt(context.attempt_id)
+        return {"state": "abandoned", "permitted_next_intents": ["start_attempt", "inspect_repair_targets", "select_and_finalize", "workspace_status"]}
+
+    @staticmethod
+    def _cleanup_draft_stages(stages: Sequence[Path]) -> None:
+        for stage in stages:
+            if stage.exists() and not stage.is_symlink():
+                shutil.rmtree(stage, ignore_errors=True)
 
     def inspect_formal_preview(self, preview_handle: str) -> Mapping[str, Any]:
         self.registry.resolve(preview_handle, "preview")

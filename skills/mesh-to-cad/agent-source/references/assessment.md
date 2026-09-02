@@ -68,8 +68,7 @@ or non-string values fail closed.
    are independent actionable residuals, not part of the interior frontier.
 4. Make that edit under `/candidate/work/source/`. Do not touch any
    other file the supervisor named as its own.
-5. After `run_candidate_tool` produces the measured candidate evidence, write
-   `/candidate/work/assessment.json` with:
+5. Write `/candidate/work/assessment.json` with:
    - `from_step` copied from the selected parent's `decision_facts.step_ordinal`;
      `to_step` bound to the current Repair Attempt's intended child step;
    - a `summary` naming the active repair depth, the repair-target `kind` and
@@ -77,8 +76,16 @@ or non-string values fail closed.
      show if the hypothesis holds; acceptance remains host-only;
    - a `preview_observation` grounded in the returned Reference Observation,
      parent decision facts, inspected formal preview, and intended source edit.
-6. Submit through `submit_repair`. The supervisor uses your assessment as
-   authored notes only.
+6. Evaluate through `evaluate_repair_draft`. The supervisor snapshots your
+   source and assessment into a fresh private stage, performs the canonical
+   build there, freezes provider evidence, and returns closed feedback.
+   Compare retained drafts, edit the current source for another evaluation if
+   needed, then submit the chosen opaque `draft_handle` through
+   `submit_repair`. A completed ticket, including an admitted failure, replays
+   its exact result. Invalid and stale tickets consume no evaluation slot.
+   A retained successful draft remains available after a later failure or
+   budget exhaustion. Use `abandon_repair_attempt` whenever the active Repair
+   strategy should be retired; never create, inspect, or remove a Repair GLB.
 7. If changed source returns
    `change_from_parent.no_observable_geometry_change=true`, treat the
    hypothesis as a returned-shape or construction failure first. Repair empty
@@ -99,9 +106,9 @@ or non-string values fail closed.
 - **Assessment cannot reference internal identifiers.** Do not paste
   handles, digests, or paths outside
   `/candidate/work/`. Cite semantic facts, not identifiers.
-- **Assessment cannot substitute for a submission.** Writing the
-  file has no effect until you invoke `submit_repair` with the current
-  handles.
+- **Assessment cannot substitute for evaluation or submission.** Writing the
+  file has no effect until you invoke `evaluate_repair_draft`, then submit the
+  selected returned `draft_handle`.
 
 ## One worked example
 

@@ -15,7 +15,7 @@ from typing import Any, Callable, Protocol
 
 
 REQUEST_SCHEMA = "mesh-to-cad.agent-intent/1"
-RESPONSE_SCHEMA = "mesh-to-cad.agent-response/6"
+RESPONSE_SCHEMA = "mesh-to-cad.agent-response/7"
 ERROR_SCHEMA = "mesh-to-cad.agent-error/1"
 
 MAX_REQUEST_BYTES = 64 * 1024
@@ -61,7 +61,19 @@ class SupervisorPorts(Protocol):
         self,
         workspace_handle: str,
         attempt_handle: str,
+        draft_handle: str,
+    ) -> Mapping[str, Any]: ...
+
+    def evaluate_repair_draft(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
         candidate_handle: str,
+        evaluation_ticket: str,
+    ) -> Mapping[str, Any]: ...
+
+    def abandon_repair_attempt(
+        self, workspace_handle: str, attempt_handle: str
     ) -> Mapping[str, Any]: ...
 
     def inspect_formal_preview(self, preview_handle: str) -> Mapping[str, Any]: ...
@@ -184,6 +196,8 @@ _STATE_VALUES = {
     "run_candidate_tool": ("completed", "failed"),
     "submit_step_zero": ("published", "failed"),
     "submit_repair": ("published", "failed"),
+    "evaluate_repair_draft": ("evaluated", "failed"),
+    "abandon_repair_attempt": ("abandoned",),
     "inspect_formal_preview": ("available",),
     "select_and_finalize": ("finalized", "blocked"),
 }
@@ -238,6 +252,12 @@ def _handle_result(value: Any, path: str) -> str:
     if type(value) is not str or _HANDLE.fullmatch(value) is None:
         _fail("supervisor_contract_violation", path)
     return value
+
+
+def _optional_handle_result(value: Any, path: str) -> str | None:
+    if value is None:
+        return None
+    return _handle_result(value, path)
 
 
 def _bounds_result(value: Any, path: str) -> dict[str, Any]:
@@ -628,6 +648,8 @@ def _result_fields(
             result[name] = _state(value[name], operation, item_path)
         elif kind == "handle":
             result[name] = _handle_result(value[name], item_path)
+        elif kind == "optional_handle":
+            result[name] = _optional_handle_result(value[name], item_path)
         elif kind == "identity":
             result[name] = _handle_result(value[name], item_path)
         elif kind == "budgets":
@@ -638,6 +660,10 @@ def _result_fields(
             result[name] = _observation_result(value[name], item_path)
         elif kind == "decision_facts":
             result[name] = _decision_facts_result(value[name], item_path)
+        elif kind == "feedback":
+            result[name] = _draft_feedback_result(value[name], item_path)
+        elif kind == "classification":
+            result[name] = _enum(value[name], ("invalid_ticket", "stale_ticket", "admitted_failure", "repair_evidence_failed"), item_path)
         else:
             _fail("supervisor_contract_violation", item_path)
     return result
@@ -678,7 +704,70 @@ def _validate_workspace_status_result(value: Any, path: str) -> dict[str, Any]:
 
 
 def _validate_start_attempt_result(value: Any, path: str) -> dict[str, Any]:
-    return _result_fields(value, (("state", "state"), ("attempt_handle", "handle"), ("candidate_handle", "handle"), ("capability_bundle_handle", "handle"), ("permitted_next_intents", "next")), path, "start_attempt")
+    base = (("state", "state"), ("attempt_handle", "handle"), ("candidate_handle", "handle"), ("capability_bundle_handle", "handle"), ("permitted_next_intents", "next"))
+    if "evaluation_ticket" not in value:
+        return _result_fields(value, base, path, "start_attempt")
+    value = _closed(value, tuple(name for name, _kind in base) + ("evaluation_ticket", "draft_budget"), path)
+    result = _result_fields({name: value[name] for name, _kind in base}, base, path, "start_attempt")
+    result["evaluation_ticket"] = _optional_handle_result(value["evaluation_ticket"], f"{path}.evaluation_ticket")
+    budget = _closed(value["draft_budget"], ("used", "remaining", "maximum"), f"{path}.draft_budget")
+    result["draft_budget"] = {key: _integer(budget[key], f"{path}.draft_budget.{key}", maximum=8) for key in ("used", "remaining", "maximum")}
+    if result["draft_budget"]["maximum"] != 8 or result["draft_budget"]["used"] + result["draft_budget"]["remaining"] != 8:
+        _fail("supervisor_contract_violation", f"{path}.draft_budget")
+    return result
+
+
+def _draft_feedback_result(value: Any, path: str) -> dict[str, Any]:
+    value = _closed(value, ("schema", "before", "after", "delta", "target_change_preview"), path)
+    if value["schema"] != "mesh-to-cad.repair-draft-feedback/1":
+        _fail("supervisor_contract_violation", f"{path}.schema")
+    def counts(item: Any, item_path: str) -> dict[str, int]:
+        item = _closed(item, ("missing_surface_count", "excess_surface_count"), item_path)
+        return {key: _integer(item[key], f"{item_path}.{key}") for key in item}
+    before = counts(value["before"], f"{path}.before")
+    after = counts(value["after"], f"{path}.after")
+    delta = _closed(value["delta"], ("missing_surface_count", "excess_surface_count"), f"{path}.delta")
+    delta = {key: _signed_integer(delta[key], f"{path}.delta.{key}") for key in delta}
+    if any(delta[key] != after[key] - before[key] for key in delta):
+        _fail("supervisor_contract_violation", f"{path}.delta")
+    preview = _closed(value["target_change_preview"], ("resolved", "persisted", "new"), f"{path}.target_change_preview")
+    out = {}
+    for name in ("resolved", "persisted", "new"):
+        section = _closed(preview[name], ("total", "returned", "remaining", "items"), f"{path}.target_change_preview.{name}")
+        returned = _integer(section["returned"], f"{path}.target_change_preview.{name}.returned", maximum=8)
+        if type(section["items"]) is not list or len(section["items"]) != returned:
+            _fail("supervisor_contract_violation", f"{path}.target_change_preview.{name}.items")
+        items = []
+        for index, raw in enumerate(section["items"]):
+            item_path = f"{path}.target_change_preview.{name}.items[{index}]"
+            raw = _closed(raw, ("kind", "bounds_canonical"), item_path)
+            items.append({"kind": _enum(raw["kind"], ("missing", "excess"), f"{item_path}.kind"), "bounds_canonical": _bounds_canonical_result(raw["bounds_canonical"], f"{item_path}.bounds_canonical")})
+        total = _integer(section["total"], f"{path}.target_change_preview.{name}.total")
+        remaining = _integer(section["remaining"], f"{path}.target_change_preview.{name}.remaining")
+        if total != returned + remaining:
+            _fail("supervisor_contract_violation", f"{path}.target_change_preview.{name}")
+        out[name] = {"total": total, "returned": returned, "remaining": remaining, "items": items}
+    return {"schema": value["schema"], "before": before, "after": after, "delta": delta, "target_change_preview": out}
+
+
+def _validate_evaluate_repair_result(value: Any, path: str) -> dict[str, Any]:
+    if type(value) is not dict or "state" not in value:
+        _fail("supervisor_contract_violation", path)
+    if value["state"] == "failed":
+        if value.get("classification") in {"invalid_ticket", "stale_ticket"}:
+            return _result_fields(value, (("state", "state"), ("classification", "classification"), ("permitted_next_intents", "next")), path, "evaluate_repair_draft")
+        value = _closed(value, ("state", "classification", "subtype", "next_evaluation_ticket", "permitted_next_intents"), path)
+        result = _result_fields({key: value[key] for key in ("state", "classification", "permitted_next_intents")}, (("state", "state"), ("classification", "classification"), ("permitted_next_intents", "next")), path, "evaluate_repair_draft")
+        result["subtype"] = _enum(value["subtype"], ("provider_execution_failed", "voxblame_output_invalid", "preview_output_invalid", "region_diff_invalid", "source_changes_invalid"), f"{path}.subtype")
+        result["next_evaluation_ticket"] = _optional_handle_result(
+            value["next_evaluation_ticket"], f"{path}.next_evaluation_ticket"
+        )
+        return result
+    return _result_fields(value, (("state", "state"), ("draft_handle", "handle"), ("feedback", "feedback"), ("next_evaluation_ticket", "optional_handle"), ("permitted_next_intents", "next")), path, "evaluate_repair_draft")
+
+
+def _validate_abandon_repair_result(value: Any, path: str) -> dict[str, Any]:
+    return _result_fields(value, (("state", "state"), ("permitted_next_intents", "next")), path, "abandon_repair_attempt")
 
 
 def _validate_run_candidate_result(value: Any, path: str) -> dict[str, Any]:
@@ -899,7 +988,9 @@ _OPERATION_SPECS = (
         _FieldSpec("workspace_handle", "handle"), _FieldSpec("attempt_handle", "handle"), _FieldSpec("candidate_handle", "handle"), _FieldSpec("operation_handle", "handle"),
     ),), _validate_run_candidate_result, "Run one supervisor-registered candidate operation."),
     _OperationSpec("submit_step_zero", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_step_zero_result, "Submit one measured Step 0 through the supervisor."),
-    _OperationSpec("submit_repair", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_repair_result, "Submit one measured Repair Cycle through the supervisor."),
+    _OperationSpec("submit_repair", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "draft_handle")),), _validate_repair_result, "Publish one previously evaluated immutable Repair draft."),
+    _OperationSpec("evaluate_repair_draft", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle", "evaluation_ticket")),), _validate_evaluate_repair_result, "Evaluate one immutable Repair draft against the frozen Attempt binding."),
+    _OperationSpec("abandon_repair_attempt", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle")),), _validate_abandon_repair_result, "Retire the active Repair Attempt while preserving the intended step draft budget."),
     _OperationSpec("inspect_formal_preview", ((_FieldSpec("preview_handle", "handle"),),), _validate_preview_result, "Inspect one committed formal preview."),
     _OperationSpec("inspect_repair_targets", ((_FieldSpec("step_handle", "handle"), _FieldSpec("offset", "offset")),), _validate_repair_target_page_result, "Read one committed Repair Target page."),
     _OperationSpec("observe_target_section", ((_FieldSpec("step_handle", "handle"), _FieldSpec("rank", "rank")),), _validate_target_section_result, "Observe one committed Repair Target section."),
@@ -1090,6 +1181,10 @@ class AgentSurface:
                 result = self._ports.submit_step_zero(**args)
             elif intent == "submit_repair":
                 result = self._ports.submit_repair(**args)
+            elif intent == "evaluate_repair_draft":
+                result = self._ports.evaluate_repair_draft(**args)
+            elif intent == "abandon_repair_attempt":
+                result = self._ports.abandon_repair_attempt(**args)
             elif intent == "inspect_formal_preview":
                 if include_preview:
                     result, preview_png = self._ports.inspect_formal_preview_with_preview(**args)

@@ -58,7 +58,6 @@ _REPAIR_PROVIDER_SUBTYPES = {
     "source_changes_failed": "source_changes_invalid",
 }
 
-
 def _repair_evidence_subtype(error: Exception) -> str:
     return _REPAIR_PROVIDER_SUBTYPES.get(
         getattr(error, "classification", None), "provider_execution_failed"
@@ -1100,6 +1099,233 @@ def publish_cycle_from_candidate(
         "step": {"step": int(step_value)},
         "cycle": int(cycle_value),
         "decision_facts": dict(decision_facts),
+    }
+
+
+def prepare_repair_draft(
+    workspace: Path,
+    *,
+    attempt: int,
+    source: Path,
+    candidate_builder: Callable[[Path], None],
+    evidence_provider: RepairEvidenceProvider,
+    stage: Path | None = None,
+) -> dict[str, Any]:
+    """Prepare immutable Repair evidence without mutating Workspace authority."""
+    workspace = Path(workspace).resolve()
+    raw_source = Path(source)
+    if raw_source.is_symlink() or not raw_source.is_dir():
+        raise WorkspaceError("invalid_workspace_path", "trusted candidate source is unavailable")
+    source = raw_source.resolve()
+    _reject_candidate_authored_repair_evidence(source)
+    _active_root, active, plan = _core._load_active_attempt(workspace, attempt)
+    intended_step = int(active["intended_step"])
+    from_step = active.get("from_step")
+    if not isinstance(from_step, int) or from_step < 0:
+        raise WorkspaceError("invalid_attempt", "Repair Attempt has no parent Step")
+    parent_manifest = _read_authority_json(workspace, workspace / "steps" / f"{from_step:06d}" / "step.json", "$.steps")
+    preview_profile = _read_workspace_document(workspace).get("preview_profile")
+    if not isinstance(preview_profile, Mapping):
+        raise WorkspaceError("corrupt_workspace", "Workspace document is missing preview profile")
+    root = Path(stage).resolve() if stage is not None else Path(tempfile.mkdtemp(prefix=".repair-draft-", dir=workspace.parent))
+    if root.exists():
+        if root.is_symlink() or not root.is_dir():
+            raise WorkspaceError("invalid_workspace_path", "draft stage is unavailable")
+    else:
+        root.mkdir(mode=0o700, parents=False)
+    try:
+        frozen_candidate = root / "candidate"
+        _copy_agent_tree(source / "source", frozen_candidate / "source")
+        _copy_agent_file(
+            source / CANDIDATE_ASSESSMENT_RELATIVE,
+            frozen_candidate / CANDIDATE_ASSESSMENT_RELATIVE,
+        )
+        candidate_builder(frozen_candidate)
+        inputs = root / "inputs"; outputs = root / "outputs"
+        inputs.mkdir(); outputs.mkdir(); (outputs / "voxblame").mkdir()
+        candidate_mesh = inputs / "candidate.glb"; _copy_agent_file(frozen_candidate / CANDIDATE_MESH_RELATIVE, candidate_mesh)
+        candidate_source = inputs / "candidate-source"; _copy_agent_tree(frozen_candidate / "source", candidate_source)
+        reference = inputs / "reference"; _copy_agent_tree(workspace / "input", reference)
+        parent_voxblame = inputs / "parent-voxblame"; _copy_agent_tree(workspace / "voxblame", parent_voxblame)
+        parent_source = inputs / "parent-source"; _copy_agent_tree(workspace / "steps" / f"{from_step:06d}" / "candidate" / "source", parent_source)
+        request = RepairEvidenceRequest(canonical_reference=reference, candidate_mesh=candidate_mesh, candidate_source=candidate_source, parent_voxblame=parent_voxblame, parent_source=parent_source, voxblame_output=outputs / "voxblame", preview_output=outputs / "preview", region_diff_output=outputs / "region-diff.json", source_changes_output=outputs / "source-changes.json", plan=_resolve_repair_provider_plan(workspace, plan, from_step=from_step), plan_digest=active["plan_digest"], preview_profile={"name": preview_profile.get("name"), "sha256": preview_profile.get("sha256")}, from_step=from_step, to_step=intended_step, parent_observable_sha256=parent_manifest["observable_sha256"], parent_selected_summary_sha256=parent_manifest["preview_identity_sha256"])
+        _assert_repair_request_paths_outside(request, workspace)
+        try:
+            evidence_provider(request)
+            _validate_repair_stage(outputs / "voxblame", outputs / "preview", outputs / "region-diff.json", outputs / "source-changes.json", intended_step=intended_step)
+        except _core.RepairEvidenceFailure:
+            raise
+        except WorkspaceError:
+            raise
+        except Exception as error:
+            raise _core.RepairEvidenceFailure(
+                _repair_evidence_subtype(error)
+            ) from error
+        draft_measurement = outputs / "voxblame" / "steps" / f"{intended_step:06d}" / "measurement.json"
+        return {
+            "stage": root,
+            "candidate": frozen_candidate,
+            "candidate_mesh": frozen_candidate / CANDIDATE_MESH_RELATIVE,
+            "assessment": frozen_candidate / CANDIDATE_ASSESSMENT_RELATIVE,
+            "voxblame_step": draft_measurement.parent,
+            "preview": outputs / "preview",
+            "region_diff": outputs / "region-diff.json",
+            "source_changes": outputs / "source-changes.json",
+            "feedback": _repair_draft_feedback(
+                workspace,
+                from_step=from_step,
+                draft_measurement=draft_measurement,
+            ),
+        }
+    except Exception:
+        _remove_stage_tree(root)
+        raise
+
+
+def publish_prepared_repair(workspace: Path, *, attempt: int, prepared: Mapping[str, Any]) -> dict[str, Any]:
+    """Publish retained Repair evidence without rebuilding or rerunning the provider."""
+    required = ("stage", "candidate", "candidate_mesh", "assessment", "voxblame_step", "preview", "region_diff", "source_changes")
+    if any(key not in prepared for key in required):
+        raise WorkspaceError("invalid_draft", "prepared Repair draft is incomplete")
+    workspace = Path(workspace).resolve()
+    _active_root, active, _plan = _core._load_active_attempt(workspace, attempt)
+    intended_step = active.get("intended_step")
+    if not isinstance(intended_step, int) or intended_step < 1:
+        raise WorkspaceError("invalid_attempt", "Repair Attempt has no intended step")
+    internal_stage: Path | None = None
+    promoted = False
+    published = False
+    try:
+        candidate = Path(prepared["candidate"])
+        internal_stage = _open_step_zero_internal_promotion_stage(workspace)
+        internal_voxblame_step = internal_stage / "voxblame-step"
+        internal_preview = internal_stage / "preview"
+        internal_region_diff = internal_stage / "region-diff.json"
+        internal_source_changes = internal_stage / "source-changes.json"
+        _copy_agent_tree(Path(prepared["voxblame_step"]), internal_voxblame_step)
+        _copy_agent_tree(Path(prepared["preview"]), internal_preview)
+        _copy_agent_file(Path(prepared["region_diff"]), internal_region_diff)
+        _copy_agent_file(Path(prepared["source_changes"]), internal_source_changes)
+        measurement = _promote_repair_voxblame_step(
+            workspace, internal_voxblame_step, intended_step
+        )
+        promoted = True
+        try:
+            result = publish_cycle(
+                workspace,
+                attempt=attempt,
+                candidate=candidate,
+                candidate_mesh=_agent_relative(candidate, CANDIDATE_MESH_RELATIVE),
+                measurement=measurement,
+                preview=internal_preview,
+                region_diff=internal_region_diff,
+                assessment=candidate / _agent_relative(candidate, CANDIDATE_ASSESSMENT_RELATIVE),
+                source_changes=internal_source_changes,
+                _decision_facts_factory=_decision_facts_factory(workspace),
+                _repair_evidence_failures=True,
+            )
+        except Exception:
+            _rollback_repair_voxblame_step(workspace, intended_step)
+            promoted = False
+            raise
+        decision_facts = result.get("_decision_facts")
+        if not isinstance(decision_facts, Mapping):
+            raise WorkspaceError("corrupt_workspace", "publication did not return decision facts")
+        step_value = result.get("step", intended_step)
+        if isinstance(step_value, Mapping):
+            step_value = step_value.get("step", intended_step)
+        cycle_value = result.get("cycle", step_value)
+        if isinstance(cycle_value, Mapping):
+            cycle_value = cycle_value.get("cycle", step_value)
+        response = {
+            "step": {"step": int(step_value)},
+            "cycle": int(cycle_value),
+            "decision_facts": dict(decision_facts),
+        }
+        published = True
+        return response
+    finally:
+        if promoted:
+            # A successful publication owns the promoted subtree; failed
+            # publications roll it back in the inner exception above.
+            promoted = False
+        if internal_stage is not None:
+            _remove_stage_tree(internal_stage)
+        if published:
+            _remove_stage_tree(Path(prepared["stage"]))
+
+
+def _repair_draft_feedback(
+    workspace: Path, *, from_step: int, draft_measurement: Path
+) -> dict[str, Any]:
+    """Compare the frozen parent and draft Active-Depth frontiers."""
+
+    parent = _read_authority_json(
+        workspace,
+        workspace / "voxblame" / "steps" / f"{from_step:06d}" / "measurement.json",
+        "$.voxblame.parent.measurement",
+    )
+    try:
+        draft = json.loads(draft_measurement.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise WorkspaceError("invalid_draft", "draft measurement is unavailable") from error
+    if not isinstance(draft, Mapping):
+        raise WorkspaceError("invalid_draft", "draft measurement is malformed")
+
+    def frontier(measurement: Mapping[str, Any]) -> tuple[dict[str, int], list[dict[str, Any]]]:
+        summary = _project_residual_summary(measurement)["repair_frontier"]
+        counts = {
+            "missing_surface_count": summary["missing_surface_count"],
+            "excess_surface_count": summary["excess_surface_count"],
+        }
+        targets = _project_repair_target_items(
+            workspace,
+            measurement.get("repair_targets"),
+            active_depth=summary["active_depth"],
+        )
+        return counts, [
+            {"kind": item["kind"], "bounds_canonical": item["bounds_canonical"]}
+            for item in targets
+            if item["kind"] in {"missing", "excess"}
+        ]
+
+    before, before_items = frontier(parent)
+    after, after_items = frontier(draft)
+
+    def identity(item: Mapping[str, Any]) -> str:
+        return json.dumps(item, sort_keys=True, separators=(",", ":"))
+
+    before_by_identity = {identity(item): item for item in before_items}
+    after_by_identity = {identity(item): item for item in after_items}
+
+    def section(items: list[dict[str, Any]]) -> dict[str, Any]:
+        returned = items[:_MAX_DECISION_FACT_TARGETS]
+        return {
+            "total": len(items),
+            "returned": len(returned),
+            "remaining": len(items) - len(returned),
+            "items": returned,
+        }
+
+    return {
+        "schema": "mesh-to-cad.repair-draft-feedback/1",
+        "before": before,
+        "after": after,
+        "delta": {
+            key: after[key] - before[key]
+            for key in ("missing_surface_count", "excess_surface_count")
+        },
+        "target_change_preview": {
+            "resolved": section(
+                [item for item in before_items if identity(item) not in after_by_identity]
+            ),
+            "persisted": section(
+                [item for item in before_items if identity(item) in after_by_identity]
+            ),
+            "new": section(
+                [item for item in after_items if identity(item) not in before_by_identity]
+            ),
+        },
     }
 
 
