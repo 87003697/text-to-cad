@@ -176,7 +176,7 @@ def _native_call(body: object) -> dict[str, object]:
             return result
     else:
         return result
-    if not isinstance(payload, dict) or set(payload) != {"isError", "structuredContent", "content"} or type(payload.get("isError")) is not bool or payload.get("isError") is not True:
+    if not isinstance(payload, dict) or not {"isError", "structuredContent", "content"} <= set(payload) or type(payload.get("isError")) is not bool or payload.get("isError") is not True:
         return result
     structured = payload.get("structuredContent")
     result["supervisor_unavailable"] = isinstance(structured, dict) and isinstance(structured.get("error"), dict) and structured["error"].get("classification") == "supervisor_unavailable"
