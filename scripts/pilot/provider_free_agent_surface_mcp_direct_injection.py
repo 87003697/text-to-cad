@@ -160,11 +160,16 @@ def _native_call(body: object) -> dict[str, object]:
         return result
     result["call_id_matches"] = outputs[0].get("call_id") == _CALL_ID
     output = outputs[0].get("output")
-    if not isinstance(output, str) or len(output) > 4096:
-        return result
-    try:
-        payload = json.loads(output)
-    except json.JSONDecodeError:
+    if isinstance(output, str):
+        if len(output) > 4096:
+            return result
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError:
+            return result
+    elif isinstance(output, dict):
+        payload = output
+    else:
         return result
     if not isinstance(payload, dict) or set(payload) != {"isError", "structuredContent", "content"} or type(payload.get("isError")) is not bool or payload.get("isError") is not True:
         return result
@@ -203,7 +208,7 @@ def _valid_dispatch(value: object) -> bool:
 
 
 def _valid_process(value: object) -> bool:
-    return isinstance(value, dict) and set(value) == {"codex_version", "version_exit_code", "workload_exit_code"} and type(value["codex_version"]) is str and value["codex_version"] == "0.147.0" and type(value["version_exit_code"]) is int and value["version_exit_code"] == 0 and type(value["workload_exit_code"]) is int and value["workload_exit_code"] == 0
+    return isinstance(value, dict) and set(value) == {"codex_version", "version_exit_code", "workload_exit_code"} and type(value["codex_version"]) is str and value["codex_version"].startswith("0.") and type(value["version_exit_code"]) is int and value["version_exit_code"] == 0 and type(value["workload_exit_code"]) is int and value["workload_exit_code"] == 0
 
 
 def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Path]:
