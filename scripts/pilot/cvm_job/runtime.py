@@ -502,13 +502,17 @@ def _run_with_heartbeat(
     *,
     interval: float,
     env: dict[str, str] | None = None,
+    output_path: Path | None = None,
 ) -> tuple[int, int]:
+    output = output_path.open("ab", buffering=0) if output_path is not None else None
     process = subprocess.Popen(
         list(command),
         cwd=REPO_ROOT,
         stdin=subprocess.DEVNULL,
         env=env,
         start_new_session=True,
+        stdout=output,
+        stderr=subprocess.STDOUT if output is not None else None,
     )
     try:
         heartbeat(root, handle, pilot_pid=process.pid, supervisor_pid=os.getpid())
@@ -521,6 +525,9 @@ def _run_with_heartbeat(
     except BaseException:
         _terminate_process_group(process)
         raise
+    finally:
+        if output is not None:
+            output.close()
 
 
 def _terminate_process_group(
@@ -649,15 +656,18 @@ def _supervise_pilot_locked(
         pilot_environment["MODEL"] = selector_for_model(requested_model(record))
     process_status: int | None = None
     try:
+        exp_dir = REPO_ROOT / record["exp_dir"]
+        (exp_dir / "run").mkdir(parents=True, exist_ok=True)
         process_status, pilot_pid = _run_with_heartbeat(
             root,
             handle,
             pilot_command,
             interval=interval,
             env=pilot_environment,
+            output_path=exp_dir / "run" / "runner.log",
         )
-        manifest_path = REPO_ROOT / record["exp_dir"] / "artifact_manifest.json"
-        _ensure_failure_manifest(REPO_ROOT / record["exp_dir"], process_status)
+        manifest_path = exp_dir / "artifact_manifest.json"
+        _ensure_failure_manifest(exp_dir, process_status)
         runner_status, manifest_error = _manifest_result(manifest_path)
         updates = {
             "runner_final_status": runner_status,
