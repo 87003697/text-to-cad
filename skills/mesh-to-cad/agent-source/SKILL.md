@@ -677,6 +677,13 @@ Repair Cycle. The supervisor enforces this shape:
    target facts, set `from_step` to that parent's ordinal, and set assessment
    `to_step` to one greater than the maximum published returned step ordinal;
    this remains true across historical branches.
+   If `start_attempt` returns `attempt_rejected` for a closed constraint that
+   your own plan/spec facts can verify (for example, a selected target has no
+   strict positive-volume overlap with its `spec_region_id` bounds), correct
+   the plan/spec and retry `start_attempt` for the same parent when that intent
+   is permitted. Do not retry an unchanged request or loosen the supervisor
+   contract; stop only when the constraint cannot be repaired from public
+   facts or the response is a closed state with no permitted retry.
 6. `select_and_finalize` with the strongest returned opaque step handle
    and authored notes.
 
