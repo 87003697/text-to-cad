@@ -122,6 +122,13 @@ the complete `exec_command` result, including `session_id`; never print only
 `tools.write_stdin` on that same session and retain the complete returned
 result. If the wrapper would flatten the result, emit `JSON.stringify(result)`
 so no session metadata is lost. Keep all intent calls strictly serial.
+Treat `submit_step_zero`, `submit_repair`, and `evaluate_repair_draft` as
+potentially long-running calls: the `functions.exec` wrapper must emit
+`text(JSON.stringify(r))`, never only `text(r.output)`. If `session_id` is
+present, poll that same session until the client returns its JSON response;
+issue no other intent while it is live. If the wrapper returns empty output
+without a session ID, stop and report a transport issue rather than issuing
+`workspace_status` concurrently.
 Every invocation must include the request on stdin. Do not construct a request
 in a shell or JavaScript variable and then run the client without feeding that
 variable. For the first call, replace the placeholder with the opaque
