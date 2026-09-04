@@ -207,6 +207,10 @@ def _native_call(body: object) -> dict[str, object]:
     else:
         return result
     if not isinstance(payload, dict) or not {"isError", "structuredContent", "content"} <= set(payload) or type(payload.get("isError")) is not bool or payload.get("isError") is not True:
+        if isinstance(payload, dict) and set(payload) == {"schema", "error"} and payload.get("schema") == "mesh-to-cad.agent-error/1":
+            error = payload.get("error")
+            result["supervisor_unavailable"] = isinstance(error, dict) and error.get("classification") == "supervisor_unavailable"
+            result["output_shape"] = "json"
         return result
     structured = payload.get("structuredContent")
     result["supervisor_unavailable"] = isinstance(structured, dict) and isinstance(structured.get("error"), dict) and structured["error"].get("classification") == "supervisor_unavailable"
