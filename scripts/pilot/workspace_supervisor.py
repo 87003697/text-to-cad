@@ -1586,6 +1586,26 @@ class WorkspaceSupervisor:
             return None
         return result
 
+    @staticmethod
+    def _log_admission_failure(phase: str, exc: Exception) -> None:
+        detail = " ".join(str(exc).split())
+        lowered = detail.lower()
+        if any(
+            marker in detail
+            for marker in ("/", "\\", "h:")
+        ) or any(
+            marker in lowered
+            for marker in ("token", "secret", "api_key", "apikey", "authorization")
+        ):
+            detail = "<redacted>"
+        else:
+            detail = detail[:160] or "<empty>"
+        print(
+            f"[mesh-to-cad] admission_failure phase={phase} "
+            f"exception={type(exc).__name__} detail={detail}",
+            file=sys.stderr,
+        )
+
     def start_attempt(
         self,
         workspace_handle: str,
@@ -1613,11 +1633,14 @@ class WorkspaceSupervisor:
                 raise SupervisorError("attempt_already_active")
             self._starting_attempt = True
         staged_plan = self._staging_root / f"plan-{secrets.token_hex(12)}.json"
+        admission_phase = "copy_plan"
         context: _AttemptContext | None = None
         try:
             _copy_candidate_file(plan, staged_plan)
+            admission_phase = "validate_spec"
             if self._reconstruction_spec and from_step is not None:
                 self._validate_spec_region_bindings(staged_plan)
+            admission_phase = "workspace_status"
             status = self.workspace_api.workspace_status(workspace)
             raw_intended_step = status.get("next_intended_step", 0)
             if (
@@ -1633,6 +1656,7 @@ class WorkspaceSupervisor:
                 raise SupervisorError("parent_mismatch")
             if from_step is not None and from_step >= intended_step:
                 raise SupervisorError("stale_handle")
+            admission_phase = "begin_attempt"
             document = self.workspace_api.begin_attempt(
                 workspace,
                 staged_plan,
@@ -1664,12 +1688,15 @@ class WorkspaceSupervisor:
             if context is None:
                 with self._publication_condition:
                     self._starting_attempt = False
+                self._log_admission_failure(admission_phase, exc)
                 raise SupervisorError("attempt_rejected") from exc
             raise
         finally:
+            admission_phase = "cleanup"
             try:
                 staged_plan.unlink(missing_ok=True)
-            except OSError:
+            except OSError as exc:
+                self._log_admission_failure(admission_phase, exc)
                 if context is None:
                     with self._publication_condition:
                         self._starting_attempt = False
@@ -1677,6 +1704,7 @@ class WorkspaceSupervisor:
         assert context is not None
         candidate = self._reset_current_work_tree()
         if from_step is not None:
+            admission_phase = "repair_seed"
             seeder = getattr(
                 self.workspace_api, "seed_repair_source_from_parent_step", None
             )
@@ -1691,6 +1719,7 @@ class WorkspaceSupervisor:
                     destination=candidate,
                 )
             except Exception as exc:
+                self._log_admission_failure(admission_phase, exc)
                 self._discard_current_work_tree()
                 raise SupervisorError("repair_source_seed_failed") from exc
         with self._publication_condition:
