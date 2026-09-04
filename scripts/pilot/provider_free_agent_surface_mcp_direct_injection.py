@@ -176,6 +176,10 @@ def _native_call(body: object) -> dict[str, object]:
             payload = json.loads(output)
         except json.JSONDecodeError:
             return result
+        if isinstance(payload, dict):
+            result["output_keys"] = sorted(str(key) for key in payload)[:16]
+            if isinstance(payload.get("result"), dict):
+                payload = payload["result"]
     elif isinstance(output, dict):
         payload = output.get("result") if isinstance(output.get("result"), dict) else output
     elif isinstance(output, list) and len(output) == 1 and isinstance(output[0], dict) and output[0].get("type") in {"input_text", "text"} and isinstance(output[0].get("text"), str) and len(output[0]["text"]) <= 4096:
