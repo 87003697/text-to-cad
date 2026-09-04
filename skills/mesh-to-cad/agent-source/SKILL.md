@@ -128,6 +128,14 @@ variable. For the first call, replace the placeholder with the opaque
 `workspace_handle` from `/candidate/bootstrap.json` and copy this complete
 invocation:
 
+If the client returns `invalid_request` at path `$.request`, retry that same
+intent once only when the immediately preceding invocation visibly contains a
+heredoc or handle-interpolation error that you can correct locally. In
+particular, a single-quoted heredoc (`<<'JSON'`) does not expand a shell
+`$(python3 ...)` substitution or `${HANDLE_JSON}`; use the documented variable
+expansion form, then resend the unchanged intent envelope once. Treat any
+other `invalid_request` as a closed supervisor result and do not retry it.
+
 ```bash
 python3 /agent-surface/client.py <<'JSON'
 {"schema":"mesh-to-cad.agent-intent/1","intent":"workspace_status","args":{"workspace_handle":"<workspace_handle from /candidate/bootstrap.json>"}}
