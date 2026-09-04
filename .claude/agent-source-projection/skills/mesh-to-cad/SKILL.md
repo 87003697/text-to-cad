@@ -629,6 +629,15 @@ Rules for using decision facts:
   is better; at the same depth, a smaller `surface_error_count` is better.
   Equal depth and error count is a tie. Use missing and excess counts for
   diagnosis, not for additional ranking.
+- When the baseline has only `excess` targets and target-local or mixed
+  polarity evidence has not established a need for reconstruction, make each
+  repair draft one small change to one existing parameter, such as a relative
+  placement or thickness adjustment. Do not combine lift and thinning, redraw
+  topology, or make a broad span trim in one draft. Use the evaluation's
+  lexicographic `before`/`after`/`delta` feedback to retain or change strategy;
+  if the child is not lexicographically better, return to the best parent Step.
+  An introduced `missing` target is a refutation and diagnostic signal, not an
+  automatic rollback condition.
 - When missing and excess targets occupy the same local region, treat the
   mixed polarity as a falsification signal for the boundary or size
   hypothesis. Re-evaluate that hypothesis against the local evidence, and
