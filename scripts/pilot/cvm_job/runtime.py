@@ -253,8 +253,14 @@ def _pilot_record(
     handle = f"{group}/{exp}"
     resolved_model: str | None = None
     if include_model:
+        selected_model = model or os.environ.get("MODEL")
+        if selected_model is None and (
+            os.environ.get("PILOT_UPSTREAM_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+        ) == "https://api5.xhub.chat/v1":
+            selected_model = "sol"
         try:
-            _, resolved_model = resolve_model(model or os.environ.get("MODEL"))
+            _, resolved_model = resolve_model(selected_model)
         except ValueError as error:
             raise ProtocolError(str(error)) from error
     record = {

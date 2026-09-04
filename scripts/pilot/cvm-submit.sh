@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] (default: gpt-5.5) [--plugin-mode direct|e2e] [--view-image|--no-view-image] (default: --view-image) [--reconstruction-spec|--no-reconstruction-spec] (default: --reconstruction-spec) | provider-free installed-plugin|agent-surface-mcp-injection|agent-surface-mcp-direct-injection|agent-surface-mcp-ephemeral-differential|workspace-repair-chain|workspace-repair-chain-exhaustion <group>" >&2
+    echo "Usage: $0 pilot <object> <group> [--upstream venus|xhub] [--token-slot N] [--model sol|terra|luna|gpt-5.5] (default: inferred) [--plugin-mode direct|e2e] [--view-image|--no-view-image] (default: --view-image) [--reconstruction-spec|--no-reconstruction-spec] (default: --reconstruction-spec) | provider-free installed-plugin|agent-surface-mcp-injection|agent-surface-mcp-direct-injection|agent-surface-mcp-ephemeral-differential|workspace-repair-chain|workspace-repair-chain-exhaustion <group>" >&2
     exit 2
 }
 
@@ -23,6 +23,7 @@ case "$mode" in
         object_name="$2"
         group="$3"
         safe_component "$object_name" && safe_group "$group" || usage
+        upstream=""
         token_slot=""
         model=""
         plugin_mode=""
@@ -33,6 +34,11 @@ case "$mode" in
         shift 3
         while [[ $# -gt 0 ]]; do
             case "$1" in
+                --upstream)
+                    [[ $# -ge 2 && -z "$upstream" && "$2" =~ ^(venus|xhub)$ ]] || usage
+                    upstream="$2"
+                    shift 2
+                    ;;
                 --reconstruction-spec)
                     [[ "$reconstruction_spec_flag_seen" == 0 ]] || usage
                     reconstruction_spec=1
@@ -100,12 +106,19 @@ case "$mode" in
         if [[ -n "$selected_model" ]]; then
             model_export=" MODEL='$selected_model'"
         fi
+        secret_prefix='if [[ -f "$HOME/.secrets/text-to-cad.env" ]]; then set -a; source "$HOME/.secrets/text-to-cad.env"; set +a; fi'
+        upstream_export=""
+        if [[ "$upstream" == "xhub" ]]; then
+            upstream_export="export PILOT_UPSTREAM_BASE_URL='https://api5.xhub.chat/v1' && [[ -n \"\${PILOT_UPSTREAM_TOKEN:-\${OPENAI_API_KEY:-}}\" ]]"
+        elif [[ "$upstream" == "venus" ]]; then
+            upstream_export="unset PILOT_UPSTREAM_BASE_URL"
+        fi
         if [[ -n "$token_slot" ]]; then
-            remote_command="source \"\$HOME/.secrets/text-to-cad.env\" && [[ '$token_slot' -lt \"\${#VENUS_TOKENS[@]}\" ]] && export MODEL && export VENUS_TOKEN=\"\${VENUS_TOKENS[$token_slot]}\" VENUS_TOKEN_SLOT='$token_slot'$model_export && $submit_command"
+            remote_command="$secret_prefix && $upstream_export ${upstream_export:+&& }[[ '$token_slot' -lt \"\${#VENUS_TOKENS[@]}\" ]] && export MODEL && export VENUS_TOKEN=\"\${VENUS_TOKENS[$token_slot]}\" VENUS_TOKEN_SLOT='$token_slot'$model_export && $submit_command"
         elif [[ -n "$selected_model" ]]; then
-            remote_command="export MODEL='$selected_model' && $submit_command"
+            remote_command="$secret_prefix && $upstream_export ${upstream_export:+&& }export MODEL='$selected_model' && $submit_command"
         else
-            remote_command="$submit_command"
+            remote_command="$secret_prefix && $upstream_export ${upstream_export:+&& }$submit_command"
         fi
         ;;
     provider-free)

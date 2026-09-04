@@ -167,6 +167,10 @@ READY_PATTERN = re.compile(r"listening on http://127\.0\.0\.1:(\d+)")
 FINAL_SESSION_STATUSES = {"complete", "error", "empty"}
 REQUIRED_TAP_VERSION = "0.1.140"
 TAP_TARGET = "http://v2.open.venus.oa.com/llmproxy/v1"
+XHUB_TARGET = "https://api5.xhub.chat/v1"
+UPSTREAM_TARGET_ENV = "PILOT_UPSTREAM_BASE_URL"
+UPSTREAM_TOKEN_ENV = "PILOT_UPSTREAM_TOKEN"
+ALLOWED_UPSTREAM_TARGETS = frozenset({TAP_TARGET, XHUB_TARGET})
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SANDBOX_REPO_ROOT = PurePosixPath("/workspace/repo")
 SANDBOX_HOME = PurePosixPath("/home/pilot")
@@ -229,6 +233,30 @@ __pycache__/
 *.pyc
 .codex/
 """
+
+
+def resolve_upstream(environ: Mapping[str, str]) -> tuple[str, str]:
+    """Resolve one approved Responses upstream and its bearer credential."""
+
+    target = (
+        environ.get(UPSTREAM_TARGET_ENV)
+        or environ.get("OPENAI_BASE_URL")
+        or TAP_TARGET
+    ).rstrip("/")
+    if target not in ALLOWED_UPSTREAM_TARGETS:
+        raise PilotError(
+            "unsupported pilot upstream; use Venus or https://api5.xhub.chat/v1"
+        )
+    token = (
+        environ.get(UPSTREAM_TOKEN_ENV)
+        or environ.get("OPENAI_API_KEY")
+        or environ.get("VENUS_TOKEN")
+    )
+    if not token:
+        raise PilotError(
+            "pilot upstream credential is missing (set OPENAI_API_KEY or VENUS_TOKEN)"
+        )
+    return target, token
 
 
 def _workspace_json_bytes(value: Mapping[str, object]) -> bytes:
@@ -913,10 +941,7 @@ def build_bwrap_argv(
     """
 
     repo_root = repo_root.resolve()
-    if not environ.get("VENUS_TOKEN"):
-        raise PilotError(
-            "VENUS_TOKEN must be set (source ~/.secrets/text-to-cad.env)"
-        )
+    resolve_upstream(environ)
     bwrap = shutil.which("bwrap", path=environ.get("PATH"))
     if not bwrap:
         raise PilotError("bwrap not installed; run: dnf install -y bubblewrap")
@@ -1210,10 +1235,11 @@ def run_supervised(
         # Codex needs a client credential for its local provider, but the real
         # upstream token must remain in this host-side proxy process.
         tap_client_token = secrets.token_hex(32)
+        upstream_target, upstream_token = resolve_upstream(environ)
         retry_proxy = RetryProxy(
-            TAP_TARGET,
+            upstream_target,
             exp_dir / "run/venus-retry.jsonl",
-            upstream_bearer_token=environ.get("VENUS_TOKEN"),
+            upstream_bearer_token=upstream_token,
             required_client_bearer_token=tap_client_token,
         )
         retry_proxy.start()

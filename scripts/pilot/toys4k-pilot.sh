@@ -108,7 +108,13 @@ if [[ ! "$EXP_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ \
     exit 1
 fi
 EXP_DIR="outputs/${GROUP}/${EXP_NAME}"
-MODEL_SELECTOR="${MODEL:-gpt-5.5}"
+if [[ -n "${MODEL:-}" ]]; then
+    MODEL_SELECTOR="$MODEL"
+elif [[ "${PILOT_UPSTREAM_BASE_URL:-${OPENAI_BASE_URL:-}}" == "https://api5.xhub.chat/v1" ]]; then
+    MODEL_SELECTOR="sol"
+else
+    MODEL_SELECTOR="gpt-5.5"
+fi
 case "$MODEL_SELECTOR" in
     sol|terra|luna|gpt-5.5) ;;
     *)
@@ -264,7 +270,7 @@ returns the next ticket. Invalid or stale tickets consume no slot, and a
 completed ticket replays its cached result. Submit only the chosen draft_handle;
 submission uses its frozen source, assessment, and evidence without rebuilding.
 Use abandon_repair_attempt to change strategy while preserving the intended
-step's eight-evaluation budget across Attempts. No ninth ticket exists.
+step eight-evaluation budget across Attempts. No ninth ticket exists.
 On an error, preserve its classification and do not retry blindly. For a closed
 admitted evaluation failure, use only its subtype and permitted intents; an
 earlier retained draft remains submittable. Never request host diagnostics.
