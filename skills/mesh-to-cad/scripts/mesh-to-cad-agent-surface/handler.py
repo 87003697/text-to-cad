@@ -202,6 +202,98 @@ _STATE_VALUES = {
     "select_and_finalize": ("finalized", "blocked"),
 }
 
+# SupervisorPorts implementations expose only these closed classifications;
+# unknown exception attributes remain the generic public failure below.
+_PUBLIC_SUPERVISOR_CLASSIFICATIONS = frozenset(
+    {
+        "attempt_already_active",
+        "attempt_rejected",
+        "attempt_retirement_failed",
+        "budget_violation",
+        "agent_semantic_conflict",
+        "automatic_identity_conflict",
+        "build_provenance_conflict",
+        "corrupt_workspace",
+        "derived_index_conflict",
+        "derived_index_missing",
+        "git_operation_failed",
+        "git_scope_violation",
+        "build_preflight_failed",
+        "identity_conflict",
+        "incomplete_transaction",
+        "invalid_arguments",
+        "invalid_contract",
+        "invalid_git_workspace",
+        "invalid_preview",
+        "invalid_rebuild_recipe",
+        "invalid_setup",
+        "invalid_workspace_path",
+        "lfs_contract_violation",
+        "rebuild_failed",
+        "render_retries_exhausted",
+        "source_mutation",
+        "unknown_staged_state",
+        "unsupported_or_invalid_voxblame_state",
+        "untrusted_tool",
+        "verification_mismatch",
+        "workspace_conflict",
+        "candidate_changed_during_copy",
+        "candidate_copy_failed",
+        "candidate_execution_failed",
+        "candidate_file_invalid",
+        "candidate_glb_preexisting",
+        "candidate_path_escape",
+        "candidate_path_unavailable",
+        "candidate_runtime_unavailable",
+        "candidate_sandbox_unavailable",
+        "candidate_source_invalid",
+        "candidate_source_missing",
+        "candidate_source_mutated",
+        "candidate_symlink_denied",
+        "candidate_unavailable",
+        "canonical_output_invalid",
+        "cancellation_incomplete",
+        "cycle_publication_failed",
+        "decision_facts_unavailable",
+        "draft_evaluation_failed",
+        "finalization_failed",
+        "finalization_unavailable",
+        "formal_preview_unavailable",
+        "invalid_attempt",
+        "invalid_handle",
+        "invalid_operation",
+        "invalid_reference",
+        "invalid_reference_request",
+        "invalid_request",
+        "invalid_workspace",
+        "module provenance unavailable",
+        "parent_mismatch",
+        "reference_contract_violation",
+        "reference_observation_failed",
+        "reference_unavailable",
+        "repair_evidence_provider_missing",
+        "repair_source_seed_failed",
+        "repair_targets_unavailable",
+        "replayed_handle",
+        "stale_handle",
+        "stale_ticket",
+        "state_conflict",
+        "step_publication_failed",
+        "step_zero_evidence_provider_missing",
+        "supervisor_cancelled",
+        "supervisor_cleanup_failed",
+        "supervisor_failure",
+        "supervisor_storage_must_be_external",
+        "supervisor_storage_symlink",
+        "supervisor_storage_unavailable",
+        "target_section_unavailable",
+        "trusted_tools_unavailable",
+        "unsupported_reference_operation",
+        "workspace_contract_violation",
+        "workspace_unavailable",
+    }
+)
+
 
 def _state(value: Any, operation: str, path: str) -> str:
     if type(value) is not str or value not in _STATE_VALUES[operation]:
@@ -1209,7 +1301,14 @@ class AgentSurface:
                 and getattr(error, "classification", None) == "state_conflict"
             ):
                 _fail("state_conflict", "$.supervisor")
-            _fail("supervisor_failure", "$.supervisor")
+            classification = getattr(error, "classification", None)
+            _fail(
+                classification
+                if isinstance(classification, str)
+                and classification in _PUBLIC_SUPERVISOR_CLASSIFICATIONS
+                else "supervisor_failure",
+                "$.supervisor",
+            )
         try:
             if intent == "observe_reference":
                 _bind_observation_response(
