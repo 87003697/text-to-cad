@@ -241,6 +241,7 @@ def resolve_upstream(environ: Mapping[str, str]) -> tuple[str, str]:
     target = (
         environ.get(UPSTREAM_TARGET_ENV)
         or environ.get("OPENAI_BASE_URL")
+        or environ.get("SCENEGEN_BASE_URL")
         or TAP_TARGET
     ).rstrip("/")
     if target not in ALLOWED_UPSTREAM_TARGETS:
@@ -250,6 +251,7 @@ def resolve_upstream(environ: Mapping[str, str]) -> tuple[str, str]:
     token = (
         environ.get(UPSTREAM_TOKEN_ENV)
         or environ.get("OPENAI_API_KEY")
+        or environ.get("SCENEGEN_API_KEY")
         or environ.get("VENUS_TOKEN")
     )
     if not token:

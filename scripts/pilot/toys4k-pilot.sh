@@ -110,7 +110,7 @@ fi
 EXP_DIR="outputs/${GROUP}/${EXP_NAME}"
 if [[ -n "${MODEL:-}" ]]; then
     MODEL_SELECTOR="$MODEL"
-elif [[ "${PILOT_UPSTREAM_BASE_URL:-${OPENAI_BASE_URL:-}}" == "https://api5.xhub.chat/v1" ]]; then
+elif [[ "${PILOT_UPSTREAM_BASE_URL:-${OPENAI_BASE_URL:-${SCENEGEN_BASE_URL:-}}}" == "https://api5.xhub.chat/v1" ]]; then
     MODEL_SELECTOR="sol"
 else
     MODEL_SELECTOR="gpt-5.5"

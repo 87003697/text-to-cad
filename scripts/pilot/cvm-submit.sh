@@ -109,7 +109,7 @@ case "$mode" in
         secret_prefix='if [[ -f "$HOME/.secrets/text-to-cad.env" ]]; then set -a; source "$HOME/.secrets/text-to-cad.env"; set +a; fi'
         upstream_export=""
         if [[ "$upstream" == "xhub" ]]; then
-            upstream_export="export PILOT_UPSTREAM_BASE_URL='https://api5.xhub.chat/v1' && [[ -n \"\${PILOT_UPSTREAM_TOKEN:-\${OPENAI_API_KEY:-}}\" ]]"
+            upstream_export="export PILOT_UPSTREAM_BASE_URL='https://api5.xhub.chat/v1' && [[ -n \"\${PILOT_UPSTREAM_TOKEN:-\${OPENAI_API_KEY:-\${SCENEGEN_API_KEY:-}}}\" ]]"
         elif [[ "$upstream" == "venus" ]]; then
             upstream_export="unset PILOT_UPSTREAM_BASE_URL"
         fi

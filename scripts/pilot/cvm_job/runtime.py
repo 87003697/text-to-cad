@@ -257,6 +257,7 @@ def _pilot_record(
         if selected_model is None and (
             os.environ.get("PILOT_UPSTREAM_BASE_URL")
             or os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("SCENEGEN_BASE_URL")
         ) == "https://api5.xhub.chat/v1":
             selected_model = "sol"
         try:
