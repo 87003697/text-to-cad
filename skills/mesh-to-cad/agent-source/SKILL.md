@@ -614,6 +614,11 @@ Rules for using decision facts:
   is better; at the same depth, a smaller `surface_error_count` is better.
   Equal depth and error count is a tie. Use missing and excess counts for
   diagnosis, not for additional ranking.
+- When missing and excess targets occupy the same local region, treat the
+  mixed polarity as a falsification signal for the boundary or size
+  hypothesis. Re-evaluate that hypothesis against the local evidence, and
+  use the adjacent opposite-polarity target as the explicit refutation
+  condition for the next falsifiable repair.
 - If `change_from_parent.no_observable_geometry_change` is true after
   changed source, diagnose the returned shape and construction first as
   specified above before spending another attempt.
