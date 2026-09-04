@@ -249,9 +249,12 @@ def _valid_second(value: object) -> bool:
 
 def _valid_preflight(value: object) -> bool:
     fields = {"spawned", "initialize_ok", "tools_list_ok", "exact_descriptor_seen", "tools_call_ok", "is_error", "text_present", "supervisor_unavailable", "exit_class"}
-    if not isinstance(value, dict) or set(value) != fields:
+    if not isinstance(value, dict) or not fields <= set(value):
         return False
     if any(type(value[key]) is not bool for key in fields - {"exit_class"}):
+        return False
+    annotations = value.get("descriptor_annotations")
+    if not isinstance(annotations, dict) or set(annotations) != {"destructiveHint", "openWorldHint", "readOnlyHint"} or any(type(annotations[key]) is not bool for key in annotations):
         return False
     return all(value[key] is True for key in fields - {"exit_class"}) and type(value["exit_class"]) is str and value["exit_class"] == "zero"
 
