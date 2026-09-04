@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
 from scripts.pilot import plugin_deployment
+from scripts.pilot import runner as pilot_runner
 
 from . import tap_observer
 from .model import resolve_model, selector_for_model
@@ -572,6 +573,20 @@ def _manifest_result(path: Path) -> tuple[int | None, str | None]:
     return final_status, None
 
 
+def _ensure_failure_manifest(exp_dir: Path, process_status: int | None) -> None:
+    """Preserve a minimal inventory when the pilot exits before finalization."""
+
+    manifest_path = exp_dir / "artifact_manifest.json"
+    if manifest_path.is_file():
+        return
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    pilot_runner.write_artifact_manifest(
+        exp_dir,
+        process_status if isinstance(process_status, int) else 1,
+        process_status if isinstance(process_status, int) and process_status != 0 else 1,
+    )
+
+
 def supervise_pilot(
     handle: str,
     *,
@@ -642,6 +657,7 @@ def _supervise_pilot_locked(
             env=pilot_environment,
         )
         manifest_path = REPO_ROOT / record["exp_dir"] / "artifact_manifest.json"
+        _ensure_failure_manifest(REPO_ROOT / record["exp_dir"], process_status)
         runner_status, manifest_error = _manifest_result(manifest_path)
         updates = {
             "runner_final_status": runner_status,
