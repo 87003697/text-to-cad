@@ -177,8 +177,19 @@ def _native_call(body: object) -> dict[str, object]:
         try:
             payload = json.loads(output)
         except json.JSONDecodeError:
-            result["output_parse"] = "invalid_json"
-            return result
+            start = output.find("{")
+            if start < 0:
+                result["output_parse"] = "invalid_json"
+                return result
+            try:
+                payload, end = json.JSONDecoder().raw_decode(output[start:])
+            except json.JSONDecodeError:
+                result["output_parse"] = "invalid_json"
+                return result
+            if not isinstance(payload, dict) or output[start + end :].strip():
+                result["output_parse"] = "invalid_json"
+                return result
+            result["output_parse"] = "embedded_object"
         result["output_parse"] = type(payload).__name__
         if isinstance(payload, dict):
             result["output_keys"] = sorted(str(key) for key in payload)[:16]
