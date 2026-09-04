@@ -155,11 +155,20 @@ def _direct_protocol(body: object) -> dict[str, object]:
 def _native_call(body: object) -> dict[str, object]:
     items = body.get("input") if isinstance(body, dict) and isinstance(body.get("input"), list) else []
     outputs = [item for item in items if isinstance(item, dict) and item.get("type") == "function_call_output"]
-    result: dict[str, object] = {"call_id_matches": False, "output_shape": "invalid", "supervisor_unavailable": False}
+    result: dict[str, object] = {
+        "call_id_matches": False,
+        "output_shape": "invalid",
+        "supervisor_unavailable": False,
+        "output_type": "missing",
+        "output_keys": [],
+    }
     if len(outputs) != 1:
         return result
     result["call_id_matches"] = outputs[0].get("call_id") == _CALL_ID
     output = outputs[0].get("output")
+    result["output_type"] = type(output).__name__
+    if isinstance(output, dict):
+        result["output_keys"] = sorted(str(key) for key in output)[:16]
     if isinstance(output, str):
         if len(output) > 4096:
             return result
@@ -198,7 +207,20 @@ def _valid_protocol(value: object) -> bool:
 
 
 def _valid_second(value: object) -> bool:
-    return isinstance(value, dict) and set(value) == {"call_id_matches", "output_shape", "supervisor_unavailable"} and type(value["call_id_matches"]) is bool and type(value["supervisor_unavailable"]) is bool and type(value["output_shape"]) is str and value["call_id_matches"] is True and value["output_shape"] == "json" and value["supervisor_unavailable"] is True
+    fields = {"call_id_matches", "output_shape", "supervisor_unavailable", "output_type", "output_keys"}
+    return (
+        isinstance(value, dict)
+        and set(value) == fields
+        and type(value["call_id_matches"]) is bool
+        and type(value["supervisor_unavailable"]) is bool
+        and type(value["output_shape"]) is str
+        and type(value["output_type"]) is str
+        and isinstance(value["output_keys"], list)
+        and all(type(key) is str for key in value["output_keys"])
+        and value["call_id_matches"] is True
+        and value["output_shape"] == "json"
+        and value["supervisor_unavailable"] is True
+    )
 
 
 def _valid_preflight(value: object) -> bool:
