@@ -5,11 +5,14 @@ from __future__ import annotations
 
 import argparse
 from collections import namedtuple
+import ctypes
+import errno
 from functools import partial
 import hashlib
 import json
 import math
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -1667,9 +1670,10 @@ def _write_terminal_handoff(
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = None
-        os.link(temporary, path, follow_symlinks=False)
+        source_remains = _link_terminal_handoff_no_replace(temporary, path)
         linked = True
-        temporary.unlink()
+        if source_remains:
+            temporary.unlink()
         _fsync_terminal_parent(path.parent)
         complete = True
     except PilotError:
@@ -1682,6 +1686,31 @@ def _write_terminal_handoff(
         temporary.unlink(missing_ok=True)
         if linked and not complete and path.exists():
             path.unlink()
+
+
+def _link_terminal_handoff_no_replace(source: Path, target: Path) -> bool:
+    """Publish one same-directory file without replacing an existing target."""
+
+    if platform.system() == "Linux":
+        renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+        if renameat2 is not None:
+            renameat2.argtypes = [
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_uint,
+            ]
+            renameat2.restype = ctypes.c_int
+            if renameat2(-100, os.fsencode(source), -100, os.fsencode(target), 1) == 0:
+                return False
+            error = ctypes.get_errno()
+            if error == errno.EEXIST:
+                raise FileExistsError(target)
+            if error not in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
+                raise OSError(error, os.strerror(error))
+    os.link(source, target, follow_symlinks=False)
+    return True
 
 
 def _validated_handoff(
