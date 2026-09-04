@@ -58,6 +58,17 @@ the reference. Alignment is not part of authoring; the Canonical
 Reference is fixed and normalization is one supervisor-owned step
 outside your sandbox.
 
+Polygon coordinates are planar: the default polygon plane is XY. For a
+semantic profile in the YZ plane, pass `Plane.YZ` explicitly (or map the
+profile coordinates explicitly into canonical XYZ) rather than relying on a
+default workplane. After every rotation or other transformed placement,
+check the resulting component's final canonical XYZ bounds.
+
+If a residual target lies outside the Reference bounds, or a transformed
+component has an unexpected global bound, fix the source coordinates first;
+do not widen the Reconstruction Spec to explain a placement error. Keep the
+strict positive-volume overlap requirement for Component targets unchanged.
+
 ## STEP-first shape return
 
 Compose primitives with build123d until `gen_step()` returns one

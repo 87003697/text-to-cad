@@ -20,6 +20,12 @@ choreography behind the intent seam.
   that the supervisor returns to you.
 - Author and edit candidate CAD source under `/candidate/work` as ordinary
   parametric Python that produces STEP.
+- Treat Polygon as XY by default; use explicit `Plane.YZ` (or an explicit
+  coordinate mapping) for semantic YZ profiles, and verify final canonical
+  XYZ bounds after every transformed placement. If a residual lies outside
+  Reference bounds or a transformed component has an unexpected global bound,
+  fix source coordinates before widening the Reconstruction Spec. Component
+  targets still require strict positive-volume overlap.
 - Ask for one supervisor-owned operation at a time through the intent
   seam.
 - Read every intent response before issuing the next; the response tells
