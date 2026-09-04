@@ -106,7 +106,10 @@ case "$mode" in
         if [[ -n "$selected_model" ]]; then
             model_export=" MODEL='$selected_model'"
         fi
-        secret_prefix='if [[ -f "$HOME/.secrets/text-to-cad.env" ]]; then set -a; source "$HOME/.secrets/text-to-cad.env"; set +a; fi'
+        if [[ "$upstream" == "xhub" && -n "$token_slot" ]]; then
+            usage
+        fi
+        secret_prefix='if [[ -f "$HOME/.secrets/text-to-cad.env" ]]; then source "$HOME/.secrets/text-to-cad.env"; export VENUS_TOKEN VENUS_TOKEN_SLOT MODEL PILOT_UPSTREAM_BASE_URL PILOT_UPSTREAM_TOKEN OPENAI_BASE_URL OPENAI_API_KEY SCENEGEN_BASE_URL SCENEGEN_API_KEY; fi'
         upstream_export=""
         if [[ "$upstream" == "xhub" ]]; then
             upstream_export="export PILOT_UPSTREAM_BASE_URL='https://api5.xhub.chat/v1' && [[ -n \"\${PILOT_UPSTREAM_TOKEN:-\${OPENAI_API_KEY:-\${SCENEGEN_API_KEY:-}}}\" ]]"
