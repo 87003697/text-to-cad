@@ -109,12 +109,15 @@ case "$mode" in
         if [[ "$upstream" == "xhub" && -n "$token_slot" ]]; then
             usage
         fi
+        if [[ -n "$token_slot" && -z "$upstream" ]]; then
+            upstream="venus"
+        fi
         secret_prefix='if [[ -f "$HOME/.secrets/text-to-cad.env" ]]; then source "$HOME/.secrets/text-to-cad.env"; export VENUS_TOKEN VENUS_TOKEN_SLOT MODEL PILOT_UPSTREAM_BASE_URL PILOT_UPSTREAM_TOKEN OPENAI_BASE_URL OPENAI_API_KEY SCENEGEN_BASE_URL SCENEGEN_API_KEY; fi'
         upstream_export=""
         if [[ "$upstream" == "xhub" ]]; then
             upstream_export="export PILOT_UPSTREAM_BASE_URL='https://api5.xhub.chat/v1' && [[ -n \"\${PILOT_UPSTREAM_TOKEN:-\${OPENAI_API_KEY:-\${SCENEGEN_API_KEY:-}}}\" ]]"
         elif [[ "$upstream" == "venus" ]]; then
-            upstream_export="unset PILOT_UPSTREAM_BASE_URL"
+            upstream_export="export PILOT_UPSTREAM_BASE_URL='http://v2.open.venus.oa.com/llmproxy/v1' && unset PILOT_UPSTREAM_TOKEN OPENAI_API_KEY SCENEGEN_API_KEY"
         fi
         if [[ -n "$token_slot" ]]; then
             remote_command="$secret_prefix && $upstream_export ${upstream_export:+&& }[[ '$token_slot' -lt \"\${#VENUS_TOKENS[@]}\" ]] && export MODEL && export VENUS_TOKEN=\"\${VENUS_TOKENS[$token_slot]}\" VENUS_TOKEN_SLOT='$token_slot'$model_export && $submit_command"

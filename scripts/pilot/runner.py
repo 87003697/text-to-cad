@@ -248,12 +248,14 @@ def resolve_upstream(environ: Mapping[str, str]) -> tuple[str, str]:
         raise PilotError(
             "unsupported pilot upstream; use Venus or https://api5.xhub.chat/v1"
         )
-    token = (
-        environ.get(UPSTREAM_TOKEN_ENV)
-        or environ.get("OPENAI_API_KEY")
-        or environ.get("SCENEGEN_API_KEY")
-        or environ.get("VENUS_TOKEN")
-    )
+    if target == XHUB_TARGET:
+        token = (
+            environ.get(UPSTREAM_TOKEN_ENV)
+            or environ.get("OPENAI_API_KEY")
+            or environ.get("SCENEGEN_API_KEY")
+        )
+    else:
+        token = environ.get(UPSTREAM_TOKEN_ENV) or environ.get("VENUS_TOKEN")
     if not token:
         raise PilotError(
             "pilot upstream credential is missing (set OPENAI_API_KEY or VENUS_TOKEN)"

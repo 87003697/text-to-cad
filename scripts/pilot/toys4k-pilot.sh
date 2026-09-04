@@ -109,9 +109,11 @@ if [[ ! "$EXP_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ \
     exit 1
 fi
 EXP_DIR="outputs/${GROUP}/${EXP_NAME}"
+upstream_target="${PILOT_UPSTREAM_BASE_URL:-${OPENAI_BASE_URL:-${SCENEGEN_BASE_URL:-}}}"
+upstream_target="${upstream_target%/}"
 if [[ -n "${MODEL:-}" ]]; then
     MODEL_SELECTOR="$MODEL"
-elif [[ "${PILOT_UPSTREAM_BASE_URL:-${OPENAI_BASE_URL:-${SCENEGEN_BASE_URL:-}}}" == "https://api5.xhub.chat/v1" ]]; then
+elif [[ "$upstream_target" == "https://api5.xhub.chat/v1" ]]; then
     MODEL_SELECTOR="sol"
 else
     MODEL_SELECTOR="gpt-5.5"

@@ -254,11 +254,13 @@ def _pilot_record(
     resolved_model: str | None = None
     if include_model:
         selected_model = model or os.environ.get("MODEL")
-        if selected_model is None and (
+        upstream_target = (
             os.environ.get("PILOT_UPSTREAM_BASE_URL")
             or os.environ.get("OPENAI_BASE_URL")
             or os.environ.get("SCENEGEN_BASE_URL")
-        ) == "https://api5.xhub.chat/v1":
+            or ""
+        ).rstrip("/")
+        if selected_model is None and upstream_target == "https://api5.xhub.chat/v1":
             selected_model = "sol"
         try:
             _, resolved_model = resolve_model(selected_model)
