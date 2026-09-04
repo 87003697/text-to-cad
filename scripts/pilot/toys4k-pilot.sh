@@ -256,6 +256,12 @@ completed publication response is unavailable, call workspace_status; its
 publication_recovery, when present, is the exact published response and must
 be used without resubmitting W1. Do not issue another intent while a client
 session is live.
+When wrapping exec_command in functions.exec JavaScript, preserve and inspect
+the complete result, including session_id; never output only r.output. If a
+session_id is returned, immediately poll that same session with
+tools.write_stdin and retain its complete result. If the wrapper flattens the
+result, output JSON.stringify(result) so session metadata is preserved. Keep
+intent requests strictly serial.
 When a published Step has positive decision_facts.repair_targets.remaining,
 use inspect_repair_targets with that same step_handle and each returned
 next_offset, starting at offset 0, until next_offset is null before selecting a Repair Target. Treat

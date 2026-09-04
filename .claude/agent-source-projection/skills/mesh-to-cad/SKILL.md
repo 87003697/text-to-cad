@@ -110,6 +110,12 @@ input until the client exits and returns the response. If a completed
 publication response is unavailable, call `workspace_status`; its optional
 `publication_recovery` is the exact published response. Use it without
 resubmitting W1. Do not issue another intent while that session is live.
+When wrapping tool calls in `functions.exec` JavaScript, preserve and inspect
+the complete `exec_command` result, including `session_id`; never print only
+`result.output`. If `session_id` is present, immediately call
+`tools.write_stdin` on that same session and retain the complete returned
+result. If the wrapper would flatten the result, emit `JSON.stringify(result)`
+so no session metadata is lost. Keep all intent calls strictly serial.
 Every invocation must include the request on stdin. Do not construct a request
 in a shell or JavaScript variable and then run the client without feeding that
 variable. For the first call, replace the placeholder with the opaque
