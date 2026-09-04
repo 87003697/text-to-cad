@@ -698,6 +698,11 @@ exact Selected Step. An observation of a historical Step does not satisfy this
 gate. If `select_and_finalize` returns `state_conflict`, call
 `workspace_status`, observe a public target from the Selected Step, then retry
 the same `no_feasible_strategy` selection or continue repairing.
+Do not use `representation_limit` solely because a coarse Step 0 has a large
+error or a simple primitive fit. When public Repair Targets and repair budget
+remain, first test at least one coherent decomposition or repair hypothesis;
+reserve `representation_limit` for evidence that the target cannot be
+represented honestly in the supported STEP-first form.
 
 Report exactly what handles the supervisor returned. Do not invent
 identifiers.
