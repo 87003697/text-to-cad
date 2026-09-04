@@ -161,6 +161,7 @@ def _native_call(body: object) -> dict[str, object]:
         "supervisor_unavailable": False,
         "output_type": "missing",
         "output_keys": [],
+        "output_parse": "missing",
     }
     if len(outputs) != 1:
         return result
@@ -169,13 +170,16 @@ def _native_call(body: object) -> dict[str, object]:
     result["output_type"] = type(output).__name__
     if isinstance(output, dict):
         result["output_keys"] = sorted(str(key) for key in output)[:16]
+        result["output_parse"] = "object"
     if isinstance(output, str):
         if len(output) > 4096:
             return result
         try:
             payload = json.loads(output)
         except json.JSONDecodeError:
+            result["output_parse"] = "invalid_json"
             return result
+        result["output_parse"] = type(payload).__name__
         if isinstance(payload, dict):
             result["output_keys"] = sorted(str(key) for key in payload)[:16]
             if isinstance(payload.get("result"), dict):
@@ -211,7 +215,7 @@ def _valid_protocol(value: object) -> bool:
 
 
 def _valid_second(value: object) -> bool:
-    fields = {"call_id_matches", "output_shape", "supervisor_unavailable", "output_type", "output_keys"}
+    fields = {"call_id_matches", "output_shape", "supervisor_unavailable", "output_type", "output_keys", "output_parse"}
     return (
         isinstance(value, dict)
         and set(value) == fields
@@ -219,6 +223,7 @@ def _valid_second(value: object) -> bool:
         and type(value["supervisor_unavailable"]) is bool
         and type(value["output_shape"]) is str
         and type(value["output_type"]) is str
+        and type(value["output_parse"]) is str
         and isinstance(value["output_keys"], list)
         and all(type(key) is str for key in value["output_keys"])
         and value["call_id_matches"] is True
