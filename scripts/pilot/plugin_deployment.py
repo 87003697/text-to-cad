@@ -79,6 +79,7 @@ DEPLOYMENT_EXCLUDE_PATTERNS: tuple[str, ...] = (
     "/.git/",
     "/.venv",
     "/.venv/",
+    "/.env",
     "/.agents/",
     "/.claude/",
     "/.codex/",

@@ -22,6 +22,7 @@ htmlcov/
 
 # Local environments and caches
 .venv
+.env
 .cache
 .agents/
 graphify-out/
