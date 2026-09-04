@@ -84,7 +84,11 @@ case "$mode" in
                 *) usage ;;
             esac
         done
-        selected_model="${model:-${MODEL:-}}"
+        if [[ "$upstream" == "xhub" ]]; then
+            selected_model="$model"
+        else
+            selected_model="${model:-${MODEL:-}}"
+        fi
         if [[ -n "$selected_model" && ! "$selected_model" =~ ^(sol|terra|luna|gpt-5[.]5)$ ]]; then
             usage
         fi
@@ -116,6 +120,9 @@ case "$mode" in
         upstream_export=""
         if [[ "$upstream" == "xhub" ]]; then
             upstream_export="export PILOT_UPSTREAM_BASE_URL='https://api5.xhub.chat/v1' && [[ -n \"\${PILOT_UPSTREAM_TOKEN:-\${OPENAI_API_KEY:-\${SCENEGEN_API_KEY:-}}}\" ]]"
+            if [[ -z "$selected_model" ]]; then
+                upstream_export+=" && unset MODEL"
+            fi
         elif [[ "$upstream" == "venus" ]]; then
             upstream_export="export PILOT_UPSTREAM_BASE_URL='http://v2.open.venus.oa.com/llmproxy/v1' && unset PILOT_UPSTREAM_TOKEN OPENAI_API_KEY SCENEGEN_API_KEY"
         fi

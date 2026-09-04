@@ -32,10 +32,14 @@ fi
 # a caller wrapper. The direct Venus provider still needs VENUS_TOKEN; nohup
 # does not source shell startup files. A missing file is fine for local tests.
 SECRETS_FILE="${HOME}/.secrets/text-to-cad.env"
+MODEL_WAS_SET="${MODEL+x}"
 if [[ -f "$SECRETS_FILE" && ( -z "${VENUS_TOKEN:-}" || -z "${OPENAI_API_KEY:-}" || -z "${SCENEGEN_API_KEY:-}" ) ]]; then
     # shellcheck disable=SC1090
     source "$SECRETS_FILE"
-    export VENUS_TOKEN VENUS_TOKEN_SLOT MODEL PILOT_UPSTREAM_BASE_URL PILOT_UPSTREAM_TOKEN OPENAI_BASE_URL OPENAI_API_KEY SCENEGEN_BASE_URL SCENEGEN_API_KEY
+    export VENUS_TOKEN VENUS_TOKEN_SLOT PILOT_UPSTREAM_BASE_URL PILOT_UPSTREAM_TOKEN OPENAI_BASE_URL OPENAI_API_KEY SCENEGEN_BASE_URL SCENEGEN_API_KEY
+fi
+if [[ -z "$MODEL_WAS_SET" ]]; then
+    unset MODEL
 fi
 
 USAGE="Usage: toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e] [--view-image|--no-view-image] [--reconstruction-spec|--no-reconstruction-spec] (defaults: view_image on, Reconstruction Spec on)"
@@ -109,8 +113,17 @@ if [[ ! "$EXP_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ \
     exit 1
 fi
 EXP_DIR="outputs/${GROUP}/${EXP_NAME}"
-upstream_target="${PILOT_UPSTREAM_BASE_URL:-${OPENAI_BASE_URL:-${SCENEGEN_BASE_URL:-}}}"
+if [[ -n "${PILOT_UPSTREAM_BASE_URL:-}" ]]; then
+    upstream_target="$PILOT_UPSTREAM_BASE_URL"
+elif [[ -n "${VENUS_TOKEN:-}" ]]; then
+    upstream_target="http://v2.open.venus.oa.com/llmproxy/v1"
+else
+    upstream_target="${OPENAI_BASE_URL:-${SCENEGEN_BASE_URL:-}}"
+fi
 upstream_target="${upstream_target%/}"
+if [[ -n "$upstream_target" ]]; then
+    export PILOT_UPSTREAM_BASE_URL="$upstream_target"
+fi
 if [[ -n "${MODEL:-}" ]]; then
     MODEL_SELECTOR="$MODEL"
 elif [[ "$upstream_target" == "https://api5.xhub.chat/v1" ]]; then
