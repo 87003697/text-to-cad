@@ -688,6 +688,21 @@ Rules for using decision facts:
   hypothesis has been evaluated and a permitted publication has been attempted;
   if a single-target attempt was rejected for this reason, correct the plan and
   retry from the same exact parent when the supervisor permits it.
+- If an evaluated excess-only draft has zero Active-Depth change (`delta` is
+  zero, with all selected targets persisted and none resolved), treat that
+  selected hypothesis as refuted for the current parent. When another Attempt
+  is permitted and the public target-section observations support a coherent
+  alternate hypothesis, abandon the draft and try a different parameter class
+  from the same best parent; do not repeat the unchanged thickness hypothesis.
+  For mirrored outer-wing targets whose bounds lie within the declared wing
+  Components, a small symmetric lateral profile/span-boundary adjustment
+  inside those existing Component bounds is one candidate only when the local
+  occupancy or core profiles support a boundary/span explanation. It must
+  preserve topology, avoid broad redraws, and remain falsifiable by the
+  returned Active-Depth delta; never widen the Reconstruction Spec to admit it.
+  If no permitted alternate is supported by the public evidence, retain the
+  exact-step observation gate and allow the honest `no_feasible_strategy`
+  outcome even when an Attempt slot remains.
 - If a newly added component produces a lexicographically better child but
   creates `excess` in that component's neighborhood, keep the child as the
   parent. Use the new excess target-local sections to make the next draft one
