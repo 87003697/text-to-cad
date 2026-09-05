@@ -193,6 +193,15 @@ The `args` object must have exactly the fields for its intent:
 Send only one intent after reading the preceding client response. On an error,
 preserve its classification and do not retry blindly.
 
+Treat every returned opaque handle as scoped to the exact response that issued
+it. After `submit_step_zero` or `submit_repair`, replace the current selected
+Step handle with that response's newly returned `step_handle` before calling
+`inspect_formal_preview`, `inspect_repair_targets`, `observe_target_section`,
+or `select_and_finalize`. Never reuse a parent, draft, preview, or historical
+handle merely because its value is still visible in the transcript, and never
+invent a replacement. If a publication response is recovered through
+`workspace_status`, use only the recovered response's `step_handle`.
+
 Every successful client response is one JSON object with the response envelope:
 
 ```json
