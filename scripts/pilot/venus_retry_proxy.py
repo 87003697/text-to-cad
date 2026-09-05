@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 
 
 RETRYABLE_ERROR_CODE = "invalid_encrypted_content"
+RETRYABLE_TRANSPORT_STATUS = 502
+RETRYABLE_TRANSPORT_ERROR_CODE = "upstream_transport_error"
 VENUS_CODEX_ROUTING_HEADER = "Venus-Codex-Routing"
 MAX_RETRY_AFTER_SECONDS = 120.0
 HANDLER_QUIESCE_TIMEOUT_SECONDS = 5.0
@@ -43,6 +45,7 @@ class _ProxyServer(ThreadingHTTPServer):
         audit_path: Path,
         backoffs: tuple[float, ...],
         rate_limit_backoffs: tuple[float, ...],
+        transport_backoffs: tuple[float, ...],
         upstream_timeout: float,
         upstream_bearer_token: str | None,
         required_client_bearer_token: str | None,
@@ -54,6 +57,8 @@ class _ProxyServer(ThreadingHTTPServer):
             raise ValueError("retry policy allows at most two extra attempts")
         if len(rate_limit_backoffs) > 2:
             raise ValueError("rate-limit retry policy allows at most two extra attempts")
+        if len(transport_backoffs) > 2:
+            raise ValueError("transport retry policy allows at most two extra attempts")
         if any(not math.isfinite(delay) or delay < 0 for delay in backoffs):
             raise ValueError("retry backoffs must be finite and non-negative")
         if any(
@@ -62,6 +67,13 @@ class _ProxyServer(ThreadingHTTPServer):
         ):
             raise ValueError(
                 "rate-limit retry backoffs must be finite and non-negative"
+            )
+        if any(
+            not math.isfinite(delay) or delay < 0
+            for delay in transport_backoffs
+        ):
+            raise ValueError(
+                "transport retry backoffs must be finite and non-negative"
             )
         if not math.isfinite(upstream_timeout) or upstream_timeout <= 0:
             raise ValueError("upstream_timeout must be finite and positive")
@@ -72,6 +84,7 @@ class _ProxyServer(ThreadingHTTPServer):
         self.audit_path = audit_path
         self.backoffs = backoffs
         self.rate_limit_backoffs = rate_limit_backoffs
+        self.transport_backoffs = transport_backoffs
         self.upstream_timeout = upstream_timeout
         self.upstream_bearer_token = upstream_bearer_token
         self.required_client_bearer_token = required_client_bearer_token
@@ -263,6 +276,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         retry_budget = max(
             len(self.server.backoffs),
             len(self.server.rate_limit_backoffs),
+            len(self.server.transport_backoffs),
         )
         for attempt in range(1, retry_budget + 2):
             if self.server.stop_event.is_set():
@@ -309,11 +323,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     )
                 )
             )
+            transport_failure = (
+                status == RETRYABLE_TRANSPORT_STATUS
+                and error_code == RETRYABLE_TRANSPORT_ERROR_CODE
+            )
             retry_backoffs = (
                 self.server.rate_limit_backoffs
                 if status == 429
                 else self.server.backoffs
                 if encrypted_content_failure
+                else self.server.transport_backoffs
+                if transport_failure
                 else ()
             )
             if attempt > len(retry_backoffs):
@@ -458,6 +478,7 @@ class RetryProxy:
         *,
         backoffs: tuple[float, ...] = (0.2, 0.5),
         rate_limit_backoffs: tuple[float, ...] = (10.0, 60.0),
+        transport_backoffs: tuple[float, ...] = (0.5, 2.0),
         upstream_timeout: float = 180,
         upstream_bearer_token: str | None = None,
         required_client_bearer_token: str | None = None,
@@ -470,6 +491,7 @@ class RetryProxy:
             audit_path,
             backoffs,
             rate_limit_backoffs,
+            transport_backoffs,
             upstream_timeout,
             upstream_bearer_token,
             required_client_bearer_token,
