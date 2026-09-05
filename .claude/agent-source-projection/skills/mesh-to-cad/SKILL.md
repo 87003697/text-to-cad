@@ -193,7 +193,11 @@ The `args` object must have exactly the fields for its intent:
   `{"method":"section_profile","args":{}}`.
 
 Send only one intent after reading the preceding client response. On an error,
-preserve its classification and do not retry blindly.
+preserve its classification and do not retry blindly. In particular, after any
+`agent-error` such as `invalid_handle`, `stale_handle`, or `handle_expired`, do
+not replay the same intent or args. Issue at most one permitted
+`workspace_status` for recovery; continue only if it supplies an exact
+replacement handle, otherwise preserve the classification and stop.
 
 Treat every returned opaque handle as scoped to the exact response that issued
 it. After `submit_step_zero` or `submit_repair`, replace the current selected
@@ -715,6 +719,11 @@ Rules for using decision facts:
   is permitted and the public target-section observations support a coherent
   alternate hypothesis, abandon the draft and try a different parameter class
   from the same best parent; do not repeat the unchanged thickness hypothesis.
+  A span-only or trim hypothesis with zero delta is not by itself evidence for
+  `no_feasible_strategy`: when target-local evidence supports it, test a
+  target-supported wing placement, orientation, or profile hypothesis and
+  require measurable before/after feedback. Stop only when no coherent
+  alternate is supported by the public evidence.
   For mirrored outer-wing targets whose bounds lie within the declared wing
   Components, a small symmetric lateral profile/span-boundary adjustment
   inside those existing Component bounds is one candidate only when the local
@@ -824,7 +833,12 @@ Repair Cycle. The supervisor enforces this shape:
    a source-only edit is not an evaluable Repair draft. Only after that
    confirmation use the returned ticket with `evaluate_repair_draft`. Compare its bounded
    Active-Depth feedback with other evaluated drafts. Submit one retained
-   `draft_handle`, or call `abandon_repair_attempt` to change strategy. Each
+   `draft_handle`, or call `abandon_repair_attempt` to change strategy. After
+   abandoning, call one permitted `workspace_status` before
+   `select_and_finalize`; if it returns `publication_recovery`, replace the
+   selected Step with that exact recovered `step_handle`. Read
+   `selection_handle` and `notes_handle` only from `/candidate/bootstrap.json`
+   and pass them verbatim; do not reconstruct or invent either handle. Each
    evaluation builds in a fresh private stage; never create or remove a Repair GLB.
    Maintain the best-so-far result by Active Depth using lexicographic
    comparison. If a child is not better than that result, start the next
@@ -851,8 +865,11 @@ Repair Cycle. The supervisor enforces this shape:
    selected step is unaccepted and its selection claim uses
    `no_feasible_strategy` while public repair targets remain, call
    `observe_target_section` for that exact selected step after all publication
-   recovery has been consumed. Then call `select_and_finalize` with the
-   strongest returned opaque step handle and authored notes.
+   recovery has been consumed. Refresh with the permitted `workspace_status`
+   after any abandoned Repair Attempt, consume any exact recovery it returns,
+   and call `select_and_finalize` only with the most recent published or
+   recovered `step_handle`; use the exact bootstrap `selection_handle` and
+   `notes_handle` without reconstruction.
 
 You always read `permitted_next_intents` in the previous response and
 issue only an intent it lists. Any other intent returns
