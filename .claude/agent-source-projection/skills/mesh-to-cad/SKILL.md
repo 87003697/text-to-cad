@@ -786,12 +786,17 @@ step permits at most three Attempts and two tool failures. Step 0 is not a
 Repair Cycle. The supervisor enforces this shape:
 
 1. `workspace_status` to read the initial permitted intents and budgets.
-2. Author an initial plan at `/candidate/plan.json`, confirm that file exists
-   and has the exact initial-plan shape, then read the opaque `plan_handle` from
-   `/candidate/bootstrap.json` and pass that handle (not the plan file) to
-   `start_attempt`. If `start_attempt` returns
-   `candidate_path_unavailable`, inspect the plan's existence and shape first;
-   do not repeat an unchanged request. Then write your Step 0 source under
+2. Treat the bootstrap `plan_handle` as a registration capability: it never
+   creates `/candidate/plan.json` and is not the plan file. Before the first
+   `start_attempt`, use `apply_patch` to create the exact
+   `mesh-to-cad.initial-plan/1` object at `/candidate/plan.json`, confirm the
+   file exists, and read it back as valid JSON with only its required fields.
+   Then read the opaque `plan_handle` from `/candidate/bootstrap.json` and pass
+   that handle (not the plan file) to `start_attempt`. If
+   `start_attempt` returns `candidate_path_unavailable`, inspect and repair the
+   plan file and its exact shape first; when the corrected request is permitted,
+   retry it once, but never resend an unchanged request or use the bootstrap
+   handle as a plan file. Then write your Step 0 source under
    `/candidate/work/source/`. When Reconstruction Spec is enabled, write and
    validate `/candidate/reconstruction-spec.json` after this `start_attempt`
    returns and keep it present through Step 0 publication. Never author the
