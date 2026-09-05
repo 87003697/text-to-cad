@@ -676,6 +676,18 @@ Rules for using decision facts:
   if the child is not lexicographically better, return to the best parent Step.
   An introduced `missing` target is a refutation and diagnostic signal, not an
   automatic rollback condition.
+- When an excess-only frontier contains a mirrored or otherwise explicitly
+  symmetric set of targets on one semantic Component (for example, matching
+  outer-wing cells), do not select only one member of that set. Observe one
+  representative from each distinct mirrored geometry pair, copy every
+  selected target triple into one repair plan, and make one coherent symmetric
+  component-local trim that preserves the rest of the topology. Evaluate that
+  paired hypothesis and, when it is retained, publish the measured child so
+  the before/after frontier is authoritative. Do not stop with
+  `repeated_ineffective_strategy` or `no_feasible_strategy` before this paired
+  hypothesis has been evaluated and a permitted publication has been attempted;
+  if a single-target attempt was rejected for this reason, correct the plan and
+  retry from the same exact parent when the supervisor permits it.
 - If a newly added component produces a lexicographically better child but
   creates `excess` in that component's neighborhood, keep the child as the
   parent. Use the new excess target-local sections to make the next draft one
