@@ -126,6 +126,13 @@ the complete `exec_command` result, including `session_id`; never print only
 `tools.write_stdin` on that same session and retain the complete returned
 result. If the wrapper would flatten the result, emit `JSON.stringify(result)`
 so no session metadata is lost. Keep all intent calls strictly serial.
+The wrapper is raw JavaScript: write `chars: ""` in the `write_stdin` call,
+without adding shell-style backslashes around those quotes. If the wrapper
+itself raises a JavaScript `SyntaxError` before the fixed client starts, no
+intent was sent; correct the wrapper and resend the unchanged intent once.
+Do not treat that local wrapper error as a supervisor response. If the fixed
+client then returns a provider transport error, preserve that returned error
+and do not replay the intent blindly.
 Treat `submit_step_zero`, `submit_repair`, and `evaluate_repair_draft` as
 potentially long-running calls: the `functions.exec` wrapper must emit
 `text(JSON.stringify(r))`, never only `text(r.output)`. If `session_id` is
