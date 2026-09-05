@@ -638,6 +638,13 @@ Rules for using decision facts:
   if the child is not lexicographically better, return to the best parent Step.
   An introduced `missing` target is a refutation and diagnostic signal, not an
   automatic rollback condition.
+- If a newly added component produces a lexicographically better child but
+  creates `excess` in that component's neighborhood, keep the child as the
+  parent. Use the new excess target-local sections to make the next draft one
+  small symmetric size or placement change to that component only; preserve
+  its topology, do not return to the no-component baseline, and do not redraw
+  broadly. Continue to retain or revert by `active_depth` and
+  `surface_error_count` ranking.
 - When missing and excess targets occupy the same local region, treat the
   mixed polarity as a falsification signal for the boundary or size
   hypothesis. Re-evaluate that hypothesis against the local evidence, and
