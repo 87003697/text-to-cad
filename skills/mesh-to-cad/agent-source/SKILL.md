@@ -844,11 +844,15 @@ Repair Cycle. The supervisor enforces this shape:
    plan file and its exact shape first; when the corrected request is permitted,
    retry it once, but never resend an unchanged request or use the bootstrap
    handle as a plan file. Then write your Step 0 source under
-   `/candidate/work/source/`. When Reconstruction Spec is enabled, write and
-   validate `/candidate/reconstruction-spec.json` after this `start_attempt`
-   returns and keep it present through Step 0 publication. Never author the
-   initial source or Spec before `start_attempt`, because that intent resets
-   the Attempt workspace.
+   `/candidate/work/source/`, confirm the complete `model.py` exists and is
+   readable, and only then invoke `run_candidate_tool`. When Reconstruction
+   Spec is enabled, write and validate `/candidate/reconstruction-spec.json`
+   after this `start_attempt` returns and keep it present through Step 0
+   publication. A missing or unreadable source is a preflight error to fix
+   before the first `run_candidate_tool` call; do not use `candidate_source_missing` as a
+   normal probe or consume an Attempt by running the tool before authoring the
+   source. Never author the initial source or Spec before `start_attempt`,
+   because that intent resets the Attempt workspace.
 3. Use `run_candidate_tool` to build, preview, and measure the
    candidate. Each call returns fresh handles. A Step 0 candidate is measurable
    only when the response has `state: "completed"` and a fresh `result_handle`.
