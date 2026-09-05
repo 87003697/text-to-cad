@@ -53,7 +53,9 @@ a closed result plus the list of intents permitted next.
   A recovered publication does not itself satisfy the separate target-section
   observation required before finalizing an unaccepted step.
 - `start_attempt` — begin one bounded Attempt from an authored plan
-  handle. Optionally branch from a parent step handle.
+  handle. Read `/candidate/bootstrap.json` and pass its returned
+  `plan_handle` verbatim; handles such as `h:plan_initial` or any other
+  placeholder are not valid. Optionally branch from a parent step handle.
 - `run_candidate_tool` — for Step 0, ask the supervisor to run the fixed
   canonical build on the current Attempt's candidate. You never invoke the
   build tool yourself.
@@ -238,7 +240,13 @@ Each intent has its own closed result shape:
 - `run_candidate_tool`: `state`, `candidate_handle`, `result_handle`,
   `permitted_next_intents`.
 - `submit_step_zero`: `state`, `step_handle`, `preview_handle`, `decision_facts`,
-  `permitted_next_intents`.
+  `permitted_next_intents` on publication. A supervisor failure is instead the
+  fixed client's closed `mesh-to-cad.agent-error/1` envelope with
+  `error.classification`, `error.path`, and `error.detail`; preserve that
+  classification verbatim. In particular, `step_publication_failed` is not a
+  published result and has no step or preview handle. A later
+  `workspace_status` may carry `publication_recovery` only when the supervisor
+  reports the exact published response.
 - `submit_repair`: on publication, `state`, `step_handle`, `preview_handle`, `cycle_handle`,
   `decision_facts`, `permitted_next_intents`; on its closed evidence failure,
   `state`, `classification`, `subtype`, `permitted_next_intents`. Its subtype
@@ -769,9 +777,10 @@ step permits at most three Attempts and two tool failures. Step 0 is not a
 Repair Cycle. The supervisor enforces this shape:
 
 1. `workspace_status` to read the initial permitted intents and budgets.
-2. Author an initial plan at `/candidate/plan.json` and pass it to
-   `start_attempt`. Confirm the plan file exists and has the exact initial-plan
-   shape before issuing that intent. If `start_attempt` returns
+2. Author an initial plan at `/candidate/plan.json`, confirm that file exists
+   and has the exact initial-plan shape, then read the opaque `plan_handle` from
+   `/candidate/bootstrap.json` and pass that handle (not the plan file) to
+   `start_attempt`. If `start_attempt` returns
    `candidate_path_unavailable`, inspect the plan's existence and shape first;
    do not repeat an unchanged request. Then write your Step 0 source under
    `/candidate/work/source/`. When Reconstruction Spec is enabled, write and
@@ -780,9 +789,16 @@ Repair Cycle. The supervisor enforces this shape:
    initial source or Spec before `start_attempt`, because that intent resets
    the Attempt workspace.
 3. Use `run_candidate_tool` to build, preview, and measure the
-   candidate. Each call returns fresh handles.
+   candidate. Each call returns fresh handles. If it returns `state: "failed"`,
+   retain its `result_handle` and issue only an intent listed in that response's
+   `permitted_next_intents` for bounded diagnosis or retry within the same
+   Attempt; a failed build is never a successful candidate.
 4. Use `submit_step_zero` to submit the measured initial step. The
-   supervisor retires that Attempt and resets `/candidate/work`.
+   supervisor retires that Attempt and resets `/candidate/work`. If it returns
+   `step_publication_failed`, do not replay the publication: issue one
+   `workspace_status` only when that intent is permitted, consume its
+   `publication_recovery` if present, and otherwise preserve the returned
+   classification and stop.
 5. Inspect the returned formal preview. If the first Repair Target page has
    `remaining > 0`, call `inspect_repair_targets` at offset `0`, then follow
    every `next_offset` on the same Step before selecting a target. Then create
