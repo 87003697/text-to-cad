@@ -852,8 +852,14 @@ Repair Cycle. The supervisor enforces this shape:
    `{"schema":"mesh-to-cad.assessment/1","from_step":<parent step>,"to_step":<next intended step>,"preview_observation":"...","summary":"..."}`.
    Confirm that the file exists, has exactly those five keys, and binds
    `from_step` to the selected parent and `to_step` to the next intended step;
-   a source-only edit is not an evaluable Repair draft. Only after that
-   confirmation use the returned ticket with `evaluate_repair_draft`. Compare its bounded
+   also confirm that the current Attempt's `work/source/model.py` exists and
+   is readable before evaluating; use only the current Attempt's returned
+   `candidate_handle` and `evaluation_ticket`, never a stale artifact or
+   handle. A source-only edit is not an evaluable Repair draft. Only after
+   those confirmations use the returned ticket with `evaluate_repair_draft`.
+   An admitted `provider_execution_failed` before feedback is an artifact or
+   provider failure, not a geometry verdict; preserve its classification and
+   do not finalize it as `no_feasible_strategy`. Compare its bounded
    Active-Depth feedback with other evaluated drafts. Submit one retained
    `draft_handle`, or call `abandon_repair_attempt` to change strategy. After
    abandoning, call one permitted `workspace_status` before
