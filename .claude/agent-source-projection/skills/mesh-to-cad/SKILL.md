@@ -798,13 +798,18 @@ Repair Cycle. The supervisor enforces this shape:
    initial source or Spec before `start_attempt`, because that intent resets
    the Attempt workspace.
 3. Use `run_candidate_tool` to build, preview, and measure the
-   candidate. Each call returns fresh handles. If it returns `state: "failed"`,
-   retain its `result_handle` and issue only an intent listed in that response's
-   `permitted_next_intents` for bounded diagnosis or retry within the same
-   Attempt; a failed build is never a successful candidate.
-4. Use `submit_step_zero` to submit the measured initial step. The
-   supervisor retires that Attempt and resets `/candidate/work`. If it returns
-   `step_publication_failed`, do not replay the publication: issue one
+   candidate. Each call returns fresh handles. A Step 0 candidate is measurable
+   only when the response has `state: "completed"` and a fresh `result_handle`.
+   If it returns `state: "failed"`, retain its `result_handle` and issue only
+   an intent listed in that response's `permitted_next_intents` for bounded
+   diagnosis or retry within the same Attempt; a failed build is never a
+   successful candidate, even if that list incorrectly includes
+   `submit_step_zero`.
+4. Use `submit_step_zero` only after seeing that completed response and its
+   fresh `result_handle`; submitting after `state: "failed"` is a state-machine
+   violation. The supervisor retires that Attempt and resets `/candidate/work`.
+   If it returns `step_publication_failed`, do not replay the publication:
+   issue one
    `workspace_status` only when that intent is permitted, consume its
    `publication_recovery` if present, and otherwise preserve the returned
    classification and stop.
