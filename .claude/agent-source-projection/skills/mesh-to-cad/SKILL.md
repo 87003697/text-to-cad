@@ -358,8 +358,11 @@ evidence, previews, manifests, and export artifacts.
   }
   ```
 
-  `summary` must be a nonempty string. Do not add observations, targets, or
-  other planning fields.
+  The bootstrap `plan_handle` is only a registration capability; it does not
+  create this file. Before the first `start_attempt`, use `apply_patch` to
+  create `/candidate/plan.json` with exactly this object and confirm that the
+  file exists. `summary` must be a nonempty string. Do not add observations,
+  targets, or other planning fields.
 - For a Repair Attempt, replace `/candidate/plan.json` with exactly:
 
   ```json
@@ -429,6 +432,9 @@ evidence, previews, manifests, and export artifacts.
   }
   ```
 
+  Do not use the retired `schema`/`enabled`/`coordinate_contract`/`source`/
+  `notes` form or add any other top-level keys; the only allowed top-level
+  keys are `components`, `features`, and `relations`.
   Components require an `id` and `bounds_canonical`; Features require an `id`;
   Relations require `id`, `kind`, `from`, and `to`. Component bounds are
   finite three-axis canonical `{min,max}` arrays with `min < max` on every axis.
@@ -667,7 +673,10 @@ Repair Cycle. The supervisor enforces this shape:
 
 1. `workspace_status` to read the initial permitted intents and budgets.
 2. Author an initial plan at `/candidate/plan.json` and pass it to
-   `start_attempt`. Then write your Step 0 source under
+   `start_attempt`. Confirm the plan file exists and has the exact initial-plan
+   shape before issuing that intent. If `start_attempt` returns
+   `candidate_path_unavailable`, inspect the plan's existence and shape first;
+   do not repeat an unchanged request. Then write your Step 0 source under
    `/candidate/work/source/`.
 3. Use `run_candidate_tool` to build, preview, and measure the
    candidate. Each call returns fresh handles.
