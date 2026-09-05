@@ -482,13 +482,27 @@ evidence, previews, manifests, and export artifacts.
   profile vertex, transformed placement, and the component's intended
   extrusion/thickness extent. For a mirrored plate, its upper/lateral rows are
   part of that same Component envelope even when the example omits them.
-  After a published preview, if a public target lies outside a declared
-  Component bound but the existing source geometry for that Component already
-  reaches the target region, classify this as a Spec/source-envelope mismatch. Update
-  only that Component's bounds to the full source envelope before selecting a
-  Repair; do not change the source or widen bounds merely to admit an unrelated
-  target. If the target remains outside the corrected envelope, leave it
-  unowned and do not claim it as a Component-local Repair.
+  Check that each transformed Component and the authored candidate remain in
+  the canonical frame. If a placement or coordinate mapping is already known
+  to put geometry outside that frame, correct the source placement/mapping and
+  derive the envelope before writing the Step 0 source/Spec or publishing Step
+  0. If the mismatch is first exposed only by a published preview or its
+  Repair Targets, allow one correction-only Attempt: fix source placement/
+  mapping and the true envelope, without claiming a normal Repair hypothesis
+  or widening bounds to admit an unrelated target, then publish a corrected
+  Step. This Attempt still uses the current parent's exact
+  `voxblame.repair-batch/1`, valid `spec_region_id` and target admission,
+  `assessment.json`, current candidate/evaluation handles, successful
+  `run_candidate_tool`, and all normal publication, recovery, and acceptance
+  gates; correction-only limits the edit, not the protocol. Re-page the
+  complete target list from that new Step's returned
+  `step_handle` before entering normal component-local Repair; never reuse the
+  old Step's pages or require re-pagination before a corrected Step exists.
+  After either correction path, if a public target remains outside a declared
+  Component bound and the existing source geometry for that Component does not
+  reach the target region, leave it unowned and do not claim it as a
+  Component-local Repair. When source geometry does reach it, update only that
+  Component's bounds to the full source envelope.
 - If the execution prompt says Reconstruction Spec is enabled, create this
   exact document after the first `start_attempt` returns and before Step 0
   source execution or `submit_step_zero`. `start_attempt` resets the current
