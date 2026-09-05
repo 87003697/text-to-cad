@@ -660,6 +660,20 @@ Rules for using decision facts:
   hypothesis. Re-evaluate that hypothesis against the local evidence, and
   use the adjacent opposite-polarity target as the explicit refutation
   condition for the next falsifiable repair.
+- When a later Step still has a bounded mixed-polarity frontier (for example,
+  an eight-target page with both `missing` and `excess` cells), treat the
+  directional-cell `component_key` values in diagnostic evidence as voxel
+  provenance only. They are not semantic Components and must not be copied
+  into the Reconstruction Spec or used to claim ownership. On the exact
+  selected Step, observe at least one representative `missing` target and one
+  representative `excess` target, then bind the next hypothesis to one
+  existing semantic Component from the Spec. Make that hypothesis one small
+  component-local placement, thickness, or size adjustment that preserves
+  topology and all other Components; do not redraw the object or combine
+  unrelated edits. Compare both the active-depth frontier and the bounded
+  depth-8 evaluation before retaining the child. If the local change is not
+  lexicographically better, continue from the best parent rather than
+  escalating the perturbation.
 - If `change_from_parent.no_observable_geometry_change` is true after
   changed source, diagnose the returned shape and construction first as
   specified above before spending another attempt.
