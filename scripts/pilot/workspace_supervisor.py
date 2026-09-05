@@ -433,6 +433,23 @@ class _DraftSession:
             ticket = self._issue_ticket(attempt_id)
             return ticket, {"used": self.used, "remaining": self.maximum - self.used, "maximum": self.maximum}
 
+    @staticmethod
+    def _log_evaluation_failure(error: Exception) -> None:
+        detail = " ".join(str(error).split())
+        lowered = detail.lower()
+        if any(marker in detail for marker in ("/", "\\", "h:")) or any(
+            marker in lowered
+            for marker in ("token", "secret", "api_key", "apikey", "authorization")
+        ):
+            detail = "<redacted>"
+        else:
+            detail = detail.encode("utf-8")[:160].decode("utf-8", "ignore") or "<empty>"
+        print(
+            "[mesh-to-cad] repair_evaluation_failure phase=evaluate "
+            f"exception={type(error).__name__} detail={detail}",
+            file=sys.stderr,
+        )
+
     def evaluate(self, attempt_id: int, ticket: str, evaluator: Callable[[], Mapping[str, Any]]) -> dict[str, Any]:
         with self.condition:
             entry = self.tickets.get(ticket)
@@ -454,6 +471,7 @@ class _DraftSession:
             try:
                 result = dict(evaluator())
             except Exception as error:
+                self._log_evaluation_failure(error)
                 subtype = getattr(error, "subtype", "provider_execution_failed")
                 if subtype not in {
                     "provider_execution_failed", "voxblame_output_invalid",
