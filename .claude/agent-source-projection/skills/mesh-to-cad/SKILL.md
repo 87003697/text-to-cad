@@ -771,8 +771,14 @@ Repair Cycle. The supervisor enforces this shape:
    `spec_region_id`; use `target_ranks` only for targets whose canonical bounds
    have strictly positive volume overlap with that Component's canonical bounds.
    Start the next Attempt with an explicit parent step handle; the supervisor reseeds
-   `/candidate/work/source/` with the parent's source. Edit source and assessment,
-   then use the returned ticket with `evaluate_repair_draft`. Compare its bounded
+   `/candidate/work/source/` with the parent's source. Before the first
+   `evaluate_repair_draft`, author both the focused source edit and the exact
+   Repair assessment document at `/candidate/work/assessment.json`:
+   `{"schema":"mesh-to-cad.assessment/1","from_step":<parent step>,"to_step":<next intended step>,"preview_observation":"...","summary":"..."}`.
+   Confirm that the file exists, has exactly those five keys, and binds
+   `from_step` to the selected parent and `to_step` to the next intended step;
+   a source-only edit is not an evaluable Repair draft. Only after that
+   confirmation use the returned ticket with `evaluate_repair_draft`. Compare its bounded
    Active-Depth feedback with other evaluated drafts. Submit one retained
    `draft_handle`, or call `abandon_repair_attempt` to change strategy. Each
    evaluation builds in a fresh private stage; never create or remove a Repair GLB.
