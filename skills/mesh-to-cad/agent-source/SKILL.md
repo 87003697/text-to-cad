@@ -510,8 +510,16 @@ evidence, previews, manifests, and export artifacts.
   (such as an edit-left-wing or rear-left/fuselage probe). First perform the
   correction-only source placement/mapping and true-envelope path above,
   inheriting all of its Attempt, assessment, candidate, evaluation,
-  publication, recovery, and acceptance gates. After publishing the corrected
-  Step, discard the old pages and re-page from that new Step's exact
+  publication, recovery, and acceptance gates. Its admission preflight is
+  ordered: before the first corrected `start_attempt`, write the truthful full
+  envelope and correction-only plan, verify every selected target has strict
+  overlap with its declared `spec_region_id`, and only then send the parent
+  request. Do not first send a normal trim/placement plan against a narrowed
+  Spec and repair the Spec after `attempt_rejected`; an admission rejection is
+  not a correction workspace. If no target can satisfy overlap under the
+  truthful envelope, leave it unowned and stop under the existing gates rather
+  than widening bounds or claiming an unrelated target. After publishing the
+  corrected Step, discard the old pages and re-page from that new Step's exact
   `step_handle`; if exterior or unowned targets remain then, retain those new
   Step facts and use exact-step observation and the normal
   `no_feasible_strategy` gate rather than requiring another correction. Do not
