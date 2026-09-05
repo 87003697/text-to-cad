@@ -48,6 +48,10 @@ a closed result plus the list of intents permitted next.
   active budgets, the workspace identity, and the intents permitted next. A
   current preterminal publication whose original response was not received may
   additionally return `publication_recovery`, the exact published response.
+  When that field is present, consume it as the completed publication result
+  and use its returned `step_handle`; do not replay the publication request.
+  A recovered publication does not itself satisfy the separate target-section
+  observation required before finalizing an unaccepted step.
 - `start_attempt` — begin one bounded Attempt from an authored plan
   handle. Optionally branch from a parent step handle.
 - `run_candidate_tool` — for Step 0, ask the supervisor to run the fixed
@@ -724,8 +728,12 @@ Repair Cycle. The supervisor enforces this shape:
    is permitted. Do not retry an unchanged request or loosen the supervisor
    contract; stop only when the constraint cannot be repaired from public
    facts or the response is a closed state with no permitted retry.
-6. `select_and_finalize` with the strongest returned opaque step handle
-   and authored notes.
+6. Before `select_and_finalize`, make the finalization gate explicit: when the
+   selected step is unaccepted and its selection claim uses
+   `no_feasible_strategy` while public repair targets remain, call
+   `observe_target_section` for that exact selected step after all publication
+   recovery has been consumed. Then call `select_and_finalize` with the
+   strongest returned opaque step handle and authored notes.
 
 You always read `permitted_next_intents` in the previous response and
 issue only an intent it lists. Any other intent returns
@@ -743,8 +751,15 @@ exhausted. If cycles remain but no coherent repair is available, use
 Step with public Repair Targets, observe at least one public target on that
 exact Selected Step. An observation of a historical Step does not satisfy this
 gate. If `select_and_finalize` returns `state_conflict`, call
-`workspace_status`, observe a public target from the Selected Step, then retry
-the same `no_feasible_strategy` selection or continue repairing.
+`workspace_status` exactly once. If its result contains
+`publication_recovery`, treat that object as the exact completed publication
+response, replace the selected step handle with its returned `step_handle`,
+and do not replay the publication. In either case, observe a public target
+from the exact selected step before retrying the same `no_feasible_strategy`
+selection; the recovery object is a publication receipt, not a target-section
+observation. Retry `select_and_finalize` only after that observation, or
+continue repairing if the returned permitted intents require it. Never retry
+the same finalization request immediately after `workspace_status`.
 Do not use `representation_limit` solely because a coarse Step 0 has a large
 error or a simple primitive fit. When public Repair Targets and repair budget
 remain, first test at least one coherent decomposition or repair hypothesis;
