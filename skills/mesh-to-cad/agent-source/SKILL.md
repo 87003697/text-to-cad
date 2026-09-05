@@ -717,6 +717,14 @@ Rules for using decision facts:
   to finalize `no_feasible_strategy`.
   if a single-target attempt was rejected for this reason, correct the plan and
   retry from the same exact parent when the supervisor permits it.
+- For an excess-only paired trim, any newly introduced `missing` cells or
+  exterior/canonical-boundary overrun refutes that trim hypothesis, even when
+  its Active-Depth error improves. Return to the exact parent Step from which
+  this paired trim was evaluated, retaining that Step's opaque parent handle,
+  and compare the returned Active-Depth feedback with public repair-target and
+  boundary evidence. When cycles and Attempts remain and that evidence
+  supports an alternate, prefer a smaller symmetric profile or
+  vertical-placement change before considering `no_feasible_strategy`.
 - If an evaluated excess-only draft has zero Active-Depth change (`delta` is
   zero, with all selected targets persisted and none resolved), treat that
   selected hypothesis as refuted for the current parent. When another Attempt
