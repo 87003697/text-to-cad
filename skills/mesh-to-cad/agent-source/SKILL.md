@@ -503,6 +503,19 @@ evidence, previews, manifests, and export artifacts.
   reach the target region, leave it unowned and do not claim it as a
   Component-local Repair. When source geometry does reach it, update only that
   Component's bounds to the full source envelope.
+- Before correction-only has completed, if complete Repair Target pagination
+  leaves any exterior target, or every interior target lacks strict
+  positive-volume overlap with the declared Components, and the correction
+  path remains permitted, do not submit an ordinary component-local Repair
+  (such as an edit-left-wing or rear-left/fuselage probe). First perform the
+  correction-only source placement/mapping and true-envelope path above,
+  inheriting all of its Attempt, assessment, candidate, evaluation,
+  publication, recovery, and acceptance gates. After publishing the corrected
+  Step, discard the old pages and re-page from that new Step's exact
+  `step_handle`; if exterior or unowned targets remain then, retain those new
+  Step facts and use exact-step observation and the normal
+  `no_feasible_strategy` gate rather than requiring another correction. Do not
+  use an ownership-invalid plan as a probe before correction.
 - If the execution prompt says Reconstruction Spec is enabled, create this
   exact document after the first `start_attempt` returns and before Step 0
   source execution or `submit_step_zero`. `start_attempt` resets the current
@@ -869,11 +882,19 @@ Repair Cycle. The supervisor enforces this shape:
    also confirm that the current Attempt's `work/source/model.py` exists and
    is readable before evaluating; use only the current Attempt's returned
    `candidate_handle` and `evaluation_ticket`, never a stale artifact or
-   handle. A source-only edit is not an evaluable Repair draft. Only after
-   those confirmations use the returned ticket with `evaluate_repair_draft`.
+   handle. After any correction-only Attempt or `abandon_repair_attempt`,
+   discard prior source/artifact state and re-establish the current Attempt's
+   source readability, assessment, candidate handle, and evaluation ticket
+   before evaluating; do not carry those handles across the lifecycle reset.
+   A source-only edit is not an evaluable Repair draft. Only after these
+   confirmations use the returned ticket with `evaluate_repair_draft`.
    An admitted `provider_execution_failed` before feedback is an artifact or
    provider failure, not a geometry verdict; preserve its classification and
-   do not finalize it as `no_feasible_strategy`. Compare its bounded
+   do not finalize it as `no_feasible_strategy` or switch to a normal trim on
+   that failure. If it follows correction or abandonment, only a newly
+   established current Attempt with readable source and fresh candidate/
+   evaluation handles may continue, and it must remain within the correction
+   lifecycle until a corrected Step is published. Compare its bounded
    Active-Depth feedback with other evaluated drafts. Submit one retained
    `draft_handle`, or call `abandon_repair_attempt` to change strategy. After
    abandoning, call one permitted `workspace_status` before
