@@ -703,7 +703,9 @@ Rules for using decision facts:
   automatic rollback condition.
 - When an excess-only frontier contains a mirrored or otherwise explicitly
   symmetric set of targets on one semantic Component (for example, matching
-  outer-wing cells), do not select only one member of that set. Observe one
+  outer-wing cells), do not select only one member of that set. An observed
+  empty Reference side confirms excess/removal polarity; it does not establish
+  that a component-local trim is infeasible. Observe one
   representative from each distinct mirrored geometry pair, copy every
   selected target triple into one repair plan, and make one coherent symmetric
   component-local trim that preserves the rest of the topology. Evaluate that
@@ -711,6 +713,8 @@ Rules for using decision facts:
   the before/after frontier is authoritative. Do not stop with
   `repeated_ineffective_strategy` or `no_feasible_strategy` before this paired
   hypothesis has been evaluated and a permitted publication has been attempted;
+  if cycles and Attempts remain, observing the target alone is not sufficient
+  to finalize `no_feasible_strategy`.
   if a single-target attempt was rejected for this reason, correct the plan and
   retry from the same exact parent when the supervisor permits it.
 - If an evaluated excess-only draft has zero Active-Depth change (`delta` is
