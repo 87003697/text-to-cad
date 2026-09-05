@@ -714,6 +714,17 @@ Rules for using decision facts:
   depth-8 evaluation before retaining the child. If the local change is not
   lexicographically better, continue from the best parent rather than
   escalating the perturbation.
+- When the Step 0 mixed frontier contains mirrored wing rows, first form the
+  paired hypothesis only from targets whose bounds have strict positive-volume
+  overlap with the corresponding existing wing Components. A target in an
+  adjacent axial row outside that Component's declared Spec bounds is not a
+  wing target merely because it is mirrored; leave it for a separate supported
+  hypothesis rather than widening the Spec to make admission pass. If the
+  resulting paired plan is rejected by `start_attempt` and the rejection is
+  verifiable from those public bounds, correct the selected target set or
+  binding and retry the same parent while `start_attempt` remains permitted;
+  do not finalize `no_feasible_strategy` after the first correctable admission
+  rejection.
 - If `change_from_parent.no_observable_geometry_change` is true after
   changed source, diagnose the returned shape and construction first as
   specified above before spending another attempt.
