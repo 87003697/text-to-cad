@@ -1891,6 +1891,17 @@ def persist_agent_reconstruction_spec(
             candidate_root / "reconstruction-spec.json",
             destination,
         )
+    except FileNotFoundError as exc:
+        if workload_status:
+            print(
+                "pilot-runner: Reconstruction Spec was not authored before the "
+                "failed workload entered an Attempt; preserving the original "
+                f"status ({exc.filename})",
+                file=sys.stderr,
+            )
+            return workload_status
+        print(f"pilot-runner: cannot persist Reconstruction Spec: {exc}", file=sys.stderr)
+        return 1
     except OSError as exc:
         print(f"pilot-runner: cannot persist Reconstruction Spec: {exc}", file=sys.stderr)
         return workload_status or 1
