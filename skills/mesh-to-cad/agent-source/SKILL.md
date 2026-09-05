@@ -448,6 +448,18 @@ evidence, previews, manifests, and export artifacts.
   `inferred`, `hidden`, `uncertain`, or `mixed`. The Spec is non-authority
   working state: do not add `parent_id`, revisions, digests, history, request
   records, or Spec fields to a Repair Batch.
+- If the execution prompt says Reconstruction Spec is enabled, create this
+  exact document after the first `start_attempt` returns and before Step 0
+  source execution or `submit_step_zero`. `start_attempt` resets the current
+  `/candidate/work`, so any source or Spec written before it is discarded. The
+  initial Spec may use only the semantic Components, Features, and Relations
+  established by the modeling intent and canonical bounds; it does not need
+  post-build preview facts. The later `inspect_formal_preview` requirement
+  governs updating the initial Spec after a published Step, not creating the
+  required initial document. Confirm that the post-attempt file is present and
+  valid before running or submitting Step 0; a missing initial Spec makes Step
+  0 publication unverifiable and is not a reason to retry the publication
+  unchanged.
 - The supervisor admits at most 32 regular sidecar files under `source/`, each
   at most 512 KiB. Keep every sidecar access bundle-relative. Never author
   `candidate.glb`, `measurement.json`, `preview/`, `region-diff.json`, or
@@ -695,7 +707,11 @@ Repair Cycle. The supervisor enforces this shape:
    shape before issuing that intent. If `start_attempt` returns
    `candidate_path_unavailable`, inspect the plan's existence and shape first;
    do not repeat an unchanged request. Then write your Step 0 source under
-   `/candidate/work/source/`.
+   `/candidate/work/source/`. When Reconstruction Spec is enabled, write and
+   validate `/candidate/reconstruction-spec.json` after this `start_attempt`
+   returns and keep it present through Step 0 publication. Never author the
+   initial source or Spec before `start_attempt`, because that intent resets
+   the Attempt workspace.
 3. Use `run_candidate_tool` to build, preview, and measure the
    candidate. Each call returns fresh handles.
 4. Use `submit_step_zero` to submit the measured initial step. The
