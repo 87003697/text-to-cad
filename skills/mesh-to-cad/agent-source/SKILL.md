@@ -464,6 +464,19 @@ evidence, previews, manifests, and export artifacts.
   `inferred`, `hidden`, `uncertain`, or `mixed`. The Spec is non-authority
   working state: do not add `parent_id`, revisions, digests, history, request
   records, or Spec fields to a Repair Batch.
+- The bounds in the example above are schema examples, not values to copy.
+  Before the initial Spec is written, derive every Component envelope from the
+  complete authored source geometry in canonical coordinates: include every
+  profile vertex, transformed placement, and the component's intended
+  extrusion/thickness extent. For a mirrored plate, its upper/lateral rows are
+  part of that same Component envelope even when the example omits them.
+  After a published preview, if a public target lies outside a declared
+  Component bound but the existing source geometry for that Component already
+  reaches the target region, classify this as a Spec/source-envelope mismatch. Update
+  only that Component's bounds to the full source envelope before selecting a
+  Repair; do not change the source or widen bounds merely to admit an unrelated
+  target. If the target remains outside the corrected envelope, leave it
+  unowned and do not claim it as a Component-local Repair.
 - If the execution prompt says Reconstruction Spec is enabled, create this
   exact document after the first `start_attempt` returns and before Step 0
   source execution or `submit_step_zero`. `start_attempt` resets the current
